@@ -1,0 +1,8 @@
+# Phase 1 依赖（最小闭环）
+flet==0.86.5
+requests>=2.31
+python-dotenv>=1.0
+pyyaml>=6.0
+
+# 测试
+pytest>=8.0

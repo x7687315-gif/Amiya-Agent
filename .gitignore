@@ -1,0 +1,22 @@
+# 虚拟环境
+.venv/
+.venv_bak/
+.venv_py314/
+
+# 密钥（含 DeepSeek API Key，绝不入库）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 用户数据（对话记录 / 长期记忆 SQLite）
+data/
+
+# 游戏原声素材（用户自备，版权不入库）
+voices/
+
+# 安装日志 / 备份
+install.log
+*.bak
