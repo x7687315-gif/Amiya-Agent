@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 import flet as ft
 
 from ui.theme import ALIGN_CENTER, c, t, sp, r
+from ui.components.avatar import make_avatar
 
 
 class PersonaDrawer(ft.NavigationDrawer):
@@ -41,15 +42,12 @@ class PersonaDrawer(ft.NavigationDrawer):
             ft.Container(
                 content=ft.Column(
                     [
-                        ft.CircleAvatar(
-                            bgcolor=c.PRIMARY_LIGHT,
-                            radius=36,
-                            content=ft.Text(
-                                "阿",
-                                color=c.PRIMARY,
-                                size=24,
-                                weight=ft.FontWeight.BOLD,
-                            ),
+                        make_avatar(
+                            "阿",
+                            36,
+                            c.PRIMARY_LIGHT,
+                            text_color=c.PRIMARY,
+                            text_size=24,
                         ),
                         ft.Text(
                             self.persona.name,

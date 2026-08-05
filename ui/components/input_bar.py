@@ -5,7 +5,7 @@ from typing import Callable
 
 import flet as ft
 
-from ui.theme import ALIGN_CENTER_RIGHT, c, t, sp, r
+from ui.theme import ALIGN_CENTER_RIGHT, c, t, sp, r, layout, anim
 
 
 class InputBar(ft.Container):
@@ -23,7 +23,7 @@ class InputBar(ft.Container):
 
         self._send_btn = ft.IconButton(
             icon=ft.Icons.SEND_ROUNDED,
-            icon_color="#fff",
+            icon_color=c.ON_PRIMARY,
             bgcolor=c.PRIMARY,
             tooltip="发送",
             width=44,
@@ -33,7 +33,7 @@ class InputBar(ft.Container):
         )
 
         self._hint_counter = ft.Text(
-            "0/2000",
+            f"0/{layout.INPUT_MAX_LENGTH}",
             color=c.TEXT_MUTED,
             size=t.TINY,
             visible=False,
@@ -62,6 +62,10 @@ class InputBar(ft.Container):
 
         self._build()
 
+        # 入场淡入（由 app 在 page.add 后调用 reveal 触发）
+        self.opacity = 0
+        self.animate_opacity = ft.Animation(anim.NORMAL, anim.EASE_OUT)
+
     def _build(self) -> None:
         self.bgcolor = c.SURFACE
         self.padding = ft.Padding.only(left=sp.LG, right=sp.LG, top=sp.SM, bottom=12)
@@ -85,7 +89,7 @@ class InputBar(ft.Container):
     def _on_change(self, e: ft.ControlEvent) -> None:
         text = (self._field.value or "").strip()
         length = len(self._field.value or "")
-        self._hint_counter.value = f"{length}/2000"
+        self._hint_counter.value = f"{length}/{layout.INPUT_MAX_LENGTH}"
         self._update_send_btn(bool(text))
 
     def _on_focus(self, _e: ft.ControlEvent) -> None:
@@ -102,7 +106,7 @@ class InputBar(ft.Container):
             return
         self._send_btn.disabled = not enabled
         self._send_btn.bgcolor = c.PRIMARY if enabled else c.SURFACE_SECONDARY
-        self._send_btn.icon_color = "#fff" if enabled else c.TEXT_MUTED
+        self._send_btn.icon_color = c.ON_PRIMARY if enabled else c.TEXT_MUTED
         self._send_btn.update()
 
     def _handle_send(self, _e: ft.ControlEvent | None) -> None:
@@ -110,7 +114,7 @@ class InputBar(ft.Container):
         if not text or self._is_loading:
             return
         self._field.value = ""
-        self._hint_counter.value = "0/2000"
+        self._hint_counter.value = f"0/{layout.INPUT_MAX_LENGTH}"
         self._hint_counter.visible = False
         self._field.update()
         self._hint_counter.update()
@@ -126,10 +130,15 @@ class InputBar(ft.Container):
             self._send_btn.disabled = True
             self._send_btn.bgcolor = c.SURFACE_SECONDARY
         else:
-            self._send_btn.icon = ft.icons.SEND_ROUNDED
+            self._send_btn.icon = ft.Icons.SEND_ROUNDED
             self._update_send_btn(bool((self._field.value or "").strip()))
         self._send_btn.update()
         self._field.update()
+
+    def reveal(self) -> None:
+        """入场淡入（由 app 在装载后调用）。"""
+        self.opacity = 1
+        self.update()
 
     def focus(self) -> None:
         self._field.focus()

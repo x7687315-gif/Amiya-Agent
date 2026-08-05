@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import flet as ft
 
-from ui.theme import c, t, sp, r, layout
+from ui.theme import c, t, sp, layout
+from ui.components.avatar import make_avatar
 
 
 class ThinkingIndicator(ft.Row):
@@ -14,16 +15,7 @@ class ThinkingIndicator(ft.Row):
         self.spacing = sp.SM
         self.vertical_alignment = ft.CrossAxisAlignment.CENTER
         self.controls = [
-            ft.CircleAvatar(
-                bgcolor=c.PRIMARY,
-                radius=16,
-                content=ft.Text(
-                    layout.AI_AVATAR_TEXT,
-                    color="#fff",
-                    size=13,
-                    weight=ft.FontWeight.BOLD,
-                ),
-            ),
+            make_avatar(layout.AI_AVATAR_TEXT, 16, c.PRIMARY, text_size=13),
             ft.Text(
                 "助手正在思考…",
                 color=c.TEXT_MUTED,

@@ -4,6 +4,7 @@ from __future__ import annotations
 import flet as ft
 
 from ui.theme import c, t, sp, r, layout
+from ui.components.avatar import make_avatar
 
 
 class ChatBubble:
@@ -29,7 +30,7 @@ class ChatBubble:
                     border_radius=ft.BorderRadius.only(
                         top_left=r.LG,
                         top_right=r.LG,
-                        bottom_left=4,
+                        bottom_left=layout.BUBBLE_TAIL,
                         bottom_right=r.LG,
                     ),
                     margin=ft.Margin.only(left=64, right=sp.SM, top=4, bottom=4),
@@ -58,16 +59,7 @@ class ChatBubble:
         )
         return ft.Row(
             [
-                ft.CircleAvatar(
-                    bgcolor=c.PRIMARY,
-                    radius=16,
-                    content=ft.Text(
-                        layout.AI_AVATAR_TEXT,
-                        color="#fff",
-                        size=13,
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                ),
+                make_avatar(layout.AI_AVATAR_TEXT, 16, c.PRIMARY, text_size=13),
                 ft.Container(
                     content=content,
                     bgcolor=c.SURFACE,
@@ -76,7 +68,7 @@ class ChatBubble:
                         left=sp.MD + 2, right=sp.MD + 2, top=sp.SM + 1, bottom=sp.SM + 1
                     ),
                     border_radius=ft.BorderRadius.only(
-                        top_left=4,
+                        top_left=layout.BUBBLE_TAIL,
                         top_right=r.LG,
                         bottom_left=r.LG,
                         bottom_right=r.LG,

@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import flet as ft
 
-from ui.theme import ALIGN_CENTER, c, t, sp, r, layout
+from ui.theme import ALIGN_CENTER, c, t, sp, layout
+from ui.components.avatar import make_avatar
 
 
 class EmptyState(ft.Container):
@@ -16,15 +17,12 @@ class EmptyState(ft.Container):
         self.expand = True
         self.content = ft.Column(
             [
-                ft.CircleAvatar(
-                    bgcolor=c.PRIMARY_LIGHT,
-                    radius=48,
-                    content=ft.Text(
-                        layout.AI_AVATAR_TEXT,
-                        color=c.PRIMARY,
-                        size=28,
-                        weight=ft.FontWeight.BOLD,
-                    ),
+                make_avatar(
+                    layout.AI_AVATAR_TEXT,
+                    48,
+                    c.PRIMARY_LIGHT,
+                    text_color=c.PRIMARY,
+                    text_size=28,
                 ),
                 ft.Text(
                     f"{self.persona.address or '用户'}，欢迎回来。",

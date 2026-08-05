@@ -5,7 +5,8 @@ from typing import Callable
 
 import flet as ft
 
-from ui.theme import c, t, sp, r, layout
+from ui.theme import c, t, sp, r, layout, anim
+from ui.components.avatar import make_avatar
 
 
 class Header(ft.Container):
@@ -15,12 +16,13 @@ class Header(ft.Container):
         super().__init__()
         self.persona = persona
         self.on_persona_click = on_persona_click
-        self._status_text = ft.Text("在线", color=c.TEXT_MUTED, size=12)
-        self._status_dot = ft.Container(
-            width=8,
-            height=8,
-            bgcolor=c.SUCCESS,
-            border_radius=r.FULL,
+
+        self._status_text = ft.Text("在线", color=c.TEXT_MUTED, size=t.CAPTION)
+        self._status_dot = self._build_dot()
+        self._status_row = ft.Row(
+            [self._status_dot, self._status_text],
+            spacing=sp.SM,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         self._persona_btn = ft.IconButton(
             icon=ft.Icons.BADGE_OUTLINED,
@@ -30,23 +32,23 @@ class Header(ft.Container):
         )
         self._build()
 
+        # 入场淡入（由 app 在 page.add 后调用 reveal 触发）
+        self.opacity = 0
+        self.animate_opacity = ft.Animation(anim.NORMAL, anim.EASE_OUT)
+
+    def _build_dot(self) -> ft.Container:
+        return ft.Container(width=8, height=8, bgcolor=c.SUCCESS, border_radius=r.FULL)
+
     def _build(self) -> None:
         self.bgcolor = c.SURFACE
-        self.padding = ft.Padding.only(left=sp.LG, right=sp.LG, top=10, bottom=10)
+        self.padding = ft.Padding.only(
+            left=sp.LG, right=sp.LG, top=layout.HEADER_PAD_Y, bottom=layout.HEADER_PAD_Y
+        )
         self.border = ft.Border.only(bottom=ft.BorderSide(width=1, color=c.BORDER))
         self.height = layout.HEADER_HEIGHT
         self.content = ft.Row(
             [
-                ft.CircleAvatar(
-                    bgcolor=c.PRIMARY,
-                    radius=20,
-                    content=ft.Text(
-                        layout.AI_AVATAR_TEXT,
-                        color="#fff",
-                        size=16,
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                ),
+                make_avatar(layout.AI_AVATAR_TEXT, 20, c.PRIMARY, text_size=16),
                 ft.Column(
                     [
                         ft.Text(
@@ -64,14 +66,7 @@ class Header(ft.Container):
                     spacing=2,
                     expand=True,
                 ),
-                ft.Row(
-                    [
-                        self._status_dot,
-                        self._status_text,
-                    ],
-                    spacing=6,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
+                self._status_row,
                 self._persona_btn,
             ],
             spacing=sp.MD,
@@ -83,29 +78,16 @@ class Header(ft.Container):
         if thinking:
             self._status_text.value = "正在思考…"
             self._status_text.color = c.PRIMARY
-            self._status_dot = ft.ProgressRing(
-                width=10,
-                height=10,
-                color=c.PRIMARY,
-                stroke_width=2,
-            )
+            self._status_dot = ft.ProgressRing(width=10, height=10, color=c.PRIMARY, stroke_width=2)
         else:
             self._status_text.value = "在线"
             self._status_text.color = c.TEXT_MUTED
-            self._status_dot = ft.Container(
-                width=8,
-                height=8,
-                bgcolor=c.SUCCESS,
-                border_radius=r.FULL,
-            )
-        # 重建状态区：简单替换 Row 中的子项
-        row = self.content
-        assert isinstance(row, ft.Row)
-        row.controls[-2] = ft.Row(
-            [self._status_dot, self._status_text],
-            spacing=6,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        )
+            self._status_dot = self._build_dot()
+        # 直接替换已保存的状态行引用，避免依赖 Row 子项索引
+        self._status_row.controls[0] = self._status_dot
+        self._status_row.update()
+
+    def reveal(self) -> None:
+        """入场淡入（由 app 在装载后调用）。"""
+        self.opacity = 1
         self.update()
-
-

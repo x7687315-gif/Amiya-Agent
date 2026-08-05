@@ -93,6 +93,9 @@ class AssistantApp:
         self.input_bar = InputBar(on_send=self._on_send)
 
         self.page.add(self.header, self.chat_area, self.input_bar)
+        # 触发顶栏与输入栏入场淡入
+        self.header.reveal()
+        self.input_bar.reveal()
 
     def _open_drawer(self) -> None:
         if self.drawer is not None and self.page is not None:

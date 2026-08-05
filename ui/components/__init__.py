@@ -6,6 +6,7 @@ from .input_bar import InputBar
 from .persona_drawer import PersonaDrawer
 from .empty_state import EmptyState
 from .thinking_indicator import ThinkingIndicator
+from .avatar import make_avatar
 
 __all__ = [
     "Header",
@@ -15,4 +16,5 @@ __all__ = [
     "PersonaDrawer",
     "EmptyState",
     "ThinkingIndicator",
+    "make_avatar",
 ]

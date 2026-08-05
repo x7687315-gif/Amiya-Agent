@@ -24,6 +24,7 @@ class Colors:
     PRIMARY_LIGHT: str = "#EDE9FA"  # 用户气泡、高亮
     PRIMARY_DARK: str = "#5E4FA3"  # Hover / Pressed
     PRIMARY_SOFT: str = "#F7F5FD"  # 淡紫背景
+    ON_PRIMARY: str = "#FFFFFF"  # 紫色上的文字/图标（头像、发送键）
 
     BG: str = "#FAFAFC"  # 页面背景
     SURFACE: str = "#FFFFFF"  # 卡片、Header、Input Bar
@@ -39,6 +40,7 @@ class Colors:
     SUCCESS: str = "#22C55E"  # 在线状态点
     ERROR: str = "#EF4444"  # 错误提示
     ERROR_SURFACE: str = "#FEF2F2"  # 错误提示背景
+    SHADOW: str = "rgba(31, 31, 46, 0.12)"  # 悬浮按钮等轻微投影
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,13 @@ class Layout:
     AI_BUBBLE_MAX_RATIO: float = 0.78
     AI_AVATAR_TEXT: str = "阿"
     USER_AVATAR_TEXT: str = "博"
+
+    # 交互常量（避免在组件中散落魔法数）
+    INPUT_MAX_LENGTH: int = 2000
+    SCROLL_DURATION: int = 200
+    SCROLL_DURATION_FAST: int = 100
+    BUBBLE_TAIL: int = 4  # 气泡指向说话者的小圆角
+    HEADER_PAD_Y: int = 10  # 顶栏上下内边距
 
 
 @dataclass(frozen=True)
