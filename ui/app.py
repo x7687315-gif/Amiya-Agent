@@ -1,9 +1,9 @@
-"""Flet 桌面 UI：助手聊天界面（Phase 1）。
+"""Flet 桌面 UI：助手聊天界面（浅色几何极简版）。
 
 要点：
-- 用 page.run_thread 把 LLM 调用挪到后台，UI 不阻塞（解决旧版假死）。
+- 用 page.run_thread 把 LLM 调用挪到后台，UI 不阻塞。
 - 流式逐字更新气泡。
-- 启动时助手主动打招呼（欢迎语，非游戏原声）。
+- 启动时显示空态欢迎区，不自动发送主动问候。
 - API Key 缺失时显示明确错误，不把故障伪装成台词。
 """
 from __future__ import annotations
@@ -21,26 +21,24 @@ from config import ConfigError, load_settings  # noqa: E402
 from core.agent import Agent  # noqa: E402
 from core.llm_client import DeepSeekLLMClient  # noqa: E402
 from core.persona import load_persona  # noqa: E402
+from ui.components.chat_area import ChatArea  # noqa: E402
+from ui.components.header import Header  # noqa: E402
+from ui.components.input_bar import InputBar  # noqa: E402
+from ui.components.persona_drawer import PersonaDrawer  # noqa: E402
+from ui.theme import ALIGN_CENTER, c, layout  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("assistant")
-
-ACCENT = "#8E7CC3"  # 助手紫
-BG = "#15161D"
-PANEL = "#1E1F2A"
-BUBBLE_USER = "#2A2C3A"
-BUBBLE_AI = "#25223A"
-TEXT = "#E8E6F0"
-MUTED = "#9A94BC"
 
 
 class AssistantApp:
     def __init__(self) -> None:
         self.page: ft.Page | None = None
-        self.chat_log: ft.ListView | None = None
-        self.input_field: ft.TextField | None = None
-        self.thinking_ref: ft.Control | None = None
         self.agent: Agent | None = None
+        self.header: Header | None = None
+        self.chat_area: ChatArea | None = None
+        self.input_bar: InputBar | None = None
+        self.drawer: PersonaDrawer | None = None
 
     def run(self, page: ft.Page) -> None:
         self.page = page
@@ -49,6 +47,7 @@ class AssistantApp:
         except ConfigError as e:
             self._fatal(str(e))
             return
+
         try:
             persona = load_persona()
         except Exception as e:  # noqa: BLE001
@@ -69,195 +68,81 @@ class AssistantApp:
             history_limit=settings.history_limit,
         )
 
-        page.title = f"{persona.name} · 你的伙伴"
-        page.bgcolor = BG
-        page.window.width = 460
-        page.window.height = 720
-        page.window.min_width = 380
-        page.window.min_height = 520
-        page.padding = 0
-        page.spacing = 0
-        page.font_family = "Microsoft YaHei"
-
+        self._setup_page(persona)
         self._build_ui(persona)
-        self._add_assistant("用户，欢迎回来。今天过得还好吗？", animate=False)
 
-    # ---------- UI 构建 ----------
+    def _setup_page(self, persona) -> None:
+        assert self.page is not None
+        self.page.title = f"{persona.name} · 你的伙伴"
+        self.page.bgcolor = c.BG
+        self.page.window.width = layout.WINDOW_WIDTH
+        self.page.window.height = layout.WINDOW_HEIGHT
+        self.page.window.min_width = layout.WINDOW_MIN_WIDTH
+        self.page.window.min_height = layout.WINDOW_MIN_HEIGHT
+        self.page.padding = 0
+        self.page.spacing = 0
+        self.page.font_family = "Microsoft YaHei"
+
     def _build_ui(self, persona) -> None:
-        header = ft.Container(
-            content=ft.Row(
-                [
-                    ft.CircleAvatar(
-                        bgcolor=ACCENT,
-                        radius=20,
-                        content=ft.Text(persona.name[0], color="#fff", size=18, weight=ft.FontWeight.BOLD),
-                    ),
-                    ft.Column(
-                        [
-                            ft.Text(persona.name, color=TEXT, size=15, weight=ft.FontWeight.BOLD),
-                            ft.Text(persona.title or "本地", color=MUTED, size=11),
-                        ],
-                        spacing=2,
-                        expand=True,
-                    ),
-                ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            bgcolor=PANEL,
-            padding=ft.Padding.only(left=16, right=16, top=10, bottom=10),
-            border=ft.Border.only(bottom=ft.BorderSide(width=1, color="#2A2C3A")),
-        )
+        assert self.page is not None
+        self.drawer = PersonaDrawer(persona)
+        self.page.end_drawer = self.drawer
 
-        self.chat_log = ft.ListView(
-            controls=[],
-            spacing=14,
-            padding=ft.Padding.only(left=14, right=14, top=14, bottom=8),
-            auto_scroll=True,
-            expand=True,
-        )
+        self.header = Header(persona, on_persona_click=self._open_drawer)
+        self.chat_area = ChatArea(persona)
+        self.input_bar = InputBar(on_send=self._on_send)
 
-        self.input_field = ft.TextField(
-            hint_text="和助手说点什么…",
-            hint_style=ft.TextStyle(color=MUTED),
-            text_style=ft.TextStyle(color=TEXT, size=14),
-            bgcolor="#23252F",
-            border=ft.InputBorder.NONE,
-            border_radius=ft.BorderRadius.only(12, 12, 12, 12),
-            content_padding=ft.Padding.only(left=14, right=14, top=10, bottom=10),
-            cursor_color=ACCENT,
-            multiline=True,
-            min_lines=1,
-            max_lines=4,
-            expand=True,
-            on_submit=self._on_send,
-        )
-        send_btn = ft.IconButton(
-            icon=ft.icons.SEND_ROUNDED,
-            icon_color="#fff",
-            bgcolor=ACCENT,
-            tooltip="发送",
-            on_click=self._on_send,
-            width=44,
-            height=44,
-        )
-        input_row = ft.Container(
-            content=ft.Row([self.input_field, send_btn], spacing=8, vertical_alignment=ft.CrossAxisAlignment.END),
-            padding=ft.Padding.only(left=14, right=14, top=8, bottom=12),
-            bgcolor=PANEL,
-            border=ft.Border.only(top=ft.BorderSide(width=1, color="#2A2C3A")),
-        )
+        self.page.add(self.header, self.chat_area, self.input_bar)
 
-        self.page.add(header, self.chat_log, input_row)
+    def _open_drawer(self) -> None:
+        if self.drawer is not None and self.page is not None:
+            self.drawer.open = True
+            self.page.update()
 
-    # ---------- 交互 ----------
-    def _on_send(self, _e) -> None:
-        text = (self.input_field.value or "").strip()
-        if not text:
-            return
-        self.input_field.value = ""
-        self.page.update()
-        self._add_user(text)
+    def _on_send(self, text: str) -> None:
+        assert self.chat_area is not None and self.input_bar is not None and self.header is not None
+        self.chat_area.add_user(text)
+        self.input_bar.set_loading(True)
+        self.header.set_thinking(True)
+        assert self.page is not None
         self.page.run_thread(self._worker, text)
 
     def _worker(self, text: str) -> None:
-        assert self.agent is not None and self.page is not None
+        assert self.agent is not None and self.chat_area is not None
+        assert self.input_bar is not None and self.header is not None and self.page is not None
         try:
-            ai_text = ft.Text("", color=TEXT, size=14, selectable=True, line_height=1.5)
+            text_control = self.chat_area.start_assistant()
             started = False
-            for _delta in self.agent.reply(text):
+            for delta in self.agent.reply(text):
                 if not started:
-                    self._remove_thinking()
-                    self.chat_log.controls.append(self._ai_row(ai_text))
                     started = True
-                self.page.update()
+                self.chat_area.append_assistant_text(text_control, delta)
             if not started:
-                self._remove_thinking()
-                self._add_assistant("（用户，我一时语塞了……）")
+                self.chat_area.remove_thinking()
+                self.chat_area.add_assistant("（用户，我一时语塞了……）")
         except Exception as e:  # noqa: BLE001
             logger.exception("回复失败")
-            self._remove_thinking()
-            self._add_assistant(f"（用户，通讯有些干扰……{e}）")
-
-    # ---------- 气泡 ----------
-    def _add_user(self, text: str) -> None:
-        self.chat_log.controls.append(
-            ft.Row(
-                [
-                    ft.Container(expand=True),
-                    ft.Container(
-                        content=ft.Text(text, color=TEXT, size=14, line_height=1.5, selectable=True),
-                        bgcolor=BUBBLE_USER,
-                        padding=ft.Padding.only(left=12, right=12, top=9, bottom=9),
-                        border_radius=ft.BorderRadius.only(14, 14, 4, 14),
-                        margin=ft.Margin.only(left=48, right=4, top=0, bottom=0),
-                    ),
-                ],
-                spacing=0,
-            )
-        )
-        self.chat_log.controls.append(self._thinking())
-        self.page.update()
-
-    def _add_assistant(self, text: str, animate: bool = True) -> None:
-        t = ft.Text(text, color=TEXT, size=14, line_height=1.5, selectable=True)
-        self.chat_log.controls.append(self._ai_row(t))
-        self.page.update()
-
-    def _ai_row(self, text_control: ft.Text) -> ft.Control:
-        return ft.Row(
-            [
-                ft.CircleAvatar(
-                    bgcolor=ACCENT,
-                    radius=16,
-                    content=ft.Text("阿", color="#fff", size=13, weight=ft.FontWeight.BOLD),
-                ),
-                ft.Container(
-                    content=text_control,
-                    bgcolor=BUBBLE_AI,
-                    padding=ft.Padding.only(left=12, right=12, top=9, bottom=9),
-                    border_radius=ft.BorderRadius.only(4, 14, 14, 14),
-                    margin=ft.Margin.only(left=4, right=48, top=0, bottom=0),
-                ),
-            ],
-            spacing=8,
-            vertical_alignment=ft.CrossAxisAlignment.START,
-        )
-
-    def _thinking(self) -> ft.Control:
-        self.thinking_ref = ft.Row(
-            [
-                ft.CircleAvatar(
-                    bgcolor=ACCENT,
-                    radius=16,
-                    content=ft.Text("阿", color="#fff", size=13, weight=ft.FontWeight.BOLD),
-                ),
-                ft.Text("助手正在思考…", color=MUTED, size=12, italic=True),
-            ],
-            spacing=8,
-        )
-        return self.thinking_ref
-
-    def _remove_thinking(self) -> None:
-        if self.thinking_ref is not None and self.thinking_ref in self.chat_log.controls:
-            self.chat_log.controls.remove(self.thinking_ref)
-            self.thinking_ref = None
-            self.page.update()
+            self.chat_area.add_error(f"通讯有些干扰，请稍后再试。{e}")
+        finally:
+            self.header.set_thinking(False)
+            self.input_bar.set_loading(False)
+            self.input_bar.focus()
 
     def _fatal(self, msg: str) -> None:
+        assert self.page is not None
         self.page.add(
             ft.Container(
                 content=ft.Column(
                     [
-                        ft.Icon(ft.icons.ERROR_OUTLINE, color="#FF6B6B", size=40),
-                        ft.Text("无法启动助手", color=TEXT, size=18, weight=ft.FontWeight.BOLD),
-                        ft.Text(msg, color=MUTED, size=13, width=380),
+                        ft.Icon(ft.Icons.ERROR_OUTLINE, color=c.ERROR, size=48),
+                        ft.Text("无法启动助手", color=c.TEXT_PRIMARY, size=18, weight=ft.FontWeight.BOLD),
+                        ft.Text(msg, color=c.TEXT_SECONDARY, size=13, width=380),
                     ],
-                    spacing=12,
+                    spacing=16,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 padding=40,
-                alignment=ft.alignment.center,
+                alignment=ALIGN_CENTER,
                 expand=True,
             )
         )
