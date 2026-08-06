@@ -7,23 +7,24 @@
 Agent 永远不直接持有 store。未来的删除 / 合并 / 修改 / 用户查看记忆
 全部收敛在本层，避免编排层散落 SQL 与数据形状转换。
 
-Phase 2-A Step 2.2 严格边界——本步只做「对话记录闭环」：
-写 conversation、恢复短期上下文、维护会话 id 与 Agent 状态计数。
+Step 2.2 落地「对话记录闭环」：写 conversation、恢复短期上下文、维护会话 id。
+Step 2.3 追加「手动记忆 + 人工确认」：记忆的增 / 改 / 删 / 列举，以及
+候选队列（propose → 用户确认 → 才进正表）。**本步不调用任何 LLM。**
 
 刻意**不在本步**实现（按冻结文档构建顺序，防止提前复杂化）：
-- 手动记忆写入 / 删除 / 列举       → Step 2.3
 - 向量与 retrieve() 检索            → Step 2.4
 - Prompt 记忆注入                   → Step 2.5
+- UI 记忆管理面板                   → Step 2.6
 - LLM 自动抽取 process_queue()      → Step 2.7
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 from uuid import uuid4
 
-from .store import MemoryStore
+from .store import MEMORY_TYPES, MemoryStore
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,15 @@ VALID_ROLES = ("user", "assistant")
 def new_session_id() -> str:
     """可读且唯一的会话 id：时间戳 + 短随机后缀。"""
     return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}"
+
+
+def _clamp(value: int, low: int, high: int) -> int:
+    """把权重夹进合法区间。
+
+    越界值静默钳制而非抛错：调用方可能是 UI 滑块或未来的 LLM 输出，
+    为一个 importance=99 中断整条记忆写入不值得。
+    """
+    return max(low, min(high, int(value)))
 
 
 class MemoryManager:
@@ -88,6 +98,140 @@ class MemoryManager:
         跨会话取回：重启后助手仍接得上上次的话题，这是"记得住"的最小体现。
         """
         return self._store.recent_messages(limit=limit)
+
+    # ----- 手动记忆（Step 2.3；无任何 LLM 参与） -----
+    def _check_type(self, type: str) -> None:
+        if type not in MEMORY_TYPES:
+            raise ValueError(f"未知记忆类型: {type!r}，只接受 {MEMORY_TYPES}")
+
+    def remember(
+        self,
+        type: str,
+        content: str,
+        *,
+        importance: int = 3,
+        confidence: int = 3,
+        source_msg_id: Optional[int] = None,
+    ) -> int:
+        """直接写入一条记忆（用户明确要求「记住这个」的路径），返回 memory id。
+
+        返回 0 表示被拒绝：内容为空，或命中黑名单。
+        黑名单在**入口**拦截而不是检索时过滤——不该记的东西根本不该落盘。
+        """
+        self._check_type(type)
+        text = (content or "").strip()
+        if not text:
+            return 0
+        if self._store.is_blacklisted(text):
+            log.info("记忆被黑名单拦截，未写入: %s", text[:30])
+            return 0
+        return self._store.upsert_memory(
+            type,
+            text,
+            confidence=_clamp(confidence, 1, 5),
+            importance=_clamp(importance, 1, 10),
+            source_msg_id=source_msg_id,
+        )
+
+    def list_memories(
+        self, types: Sequence[str] = MEMORY_TYPES, limit: int = 20
+    ) -> List[Dict[str, object]]:
+        """按 importance 降序列举记忆，供用户审阅（Step 2.6 的 UI 数据源）。"""
+        return self._store.memories(types=types, limit=limit)
+
+    def edit_memory(
+        self,
+        mem_id: int,
+        *,
+        content: Optional[str] = None,
+        importance: Optional[int] = None,
+        confidence: Optional[int] = None,
+        type: Optional[str] = None,
+    ) -> bool:
+        """修正记错的记忆。类型越界立即抛错，避免写出无法被检索到的孤儿类型。"""
+        if type is not None:
+            self._check_type(type)
+        if content is not None:
+            content = content.strip() or None
+        return self._store.update_memory(
+            mem_id,
+            content=content,
+            importance=None if importance is None else _clamp(importance, 1, 10),
+            confidence=None if confidence is None else _clamp(confidence, 1, 5),
+            type=type,
+        )
+
+    def confirm_memory(self, mem_id: int) -> bool:
+        """用户确认「这条仍然成立」，刷新 last_confirmed_at（为衰减留锚点）。"""
+        return self._store.confirm_memory(mem_id)
+
+    def forget_id(self, mem_id: int) -> bool:
+        """删除单条记忆，不写黑名单（删这一条 ≠ 永久屏蔽这个话题）。"""
+        return self._store.delete_memory(mem_id)
+
+    def forget(self, keyword: str) -> int:
+        """按关键词遗忘：删正表 + 入黑名单 + 清候选队列。
+
+        三件事必须一起做。只删正表的话，队列里同主题的待确认项还会再问一次，
+        用户会觉得「我明明说了别记」。
+
+        返回**被清除的条目总数**（正表 + 待确认队列）。不只数正表：
+        用户眼里候选也是"助手想记的东西"，若只提到某主题、尚未确认就被遗忘，
+        回报 0 会让人以为命令没生效。明细走日志。
+        """
+        keyword = (keyword or "").strip()
+        if not keyword:
+            return 0
+        deleted = self._store.delete_by_keyword(keyword)
+        purged = self._store.purge_candidates_by_keyword(keyword)
+        log.info("遗忘 %r：删除记忆 %d 条，清理待确认 %d 条", keyword, deleted, purged)
+        return deleted + purged
+
+    def blacklist(self) -> List[str]:
+        return self._store.blacklist()
+
+    # ----- 候选队列（人工确认闸门） -----
+    def propose(
+        self,
+        type: str,
+        content: str,
+        *,
+        importance: int = 3,
+        confidence: int = 3,
+        reason: Optional[str] = None,
+        source_msg_id: Optional[int] = None,
+    ) -> int:
+        """提交待确认候选，返回候选 id；被拒绝（空 / 黑名单 / 已决策）时返回 0。
+
+        Step 2.7 的 LLM 抽取也只能走这条路——自动抽取的记忆一律先经人工确认，
+        避免「用户说今天天气不错 → AI 记住用户喜欢晴天」这类污染。
+        """
+        self._check_type(type)
+        text = (content or "").strip()
+        if not text:
+            return 0
+        if self._store.is_blacklisted(text):
+            log.info("候选被黑名单拦截: %s", text[:30])
+            return 0
+        return self._store.add_candidate(
+            type,
+            text,
+            confidence=_clamp(confidence, 1, 5),
+            importance=_clamp(importance, 1, 10),
+            reason=reason,
+            source_msg_id=source_msg_id,
+        )
+
+    def pending_candidates(self, limit: int = 20) -> List[Dict[str, object]]:
+        return self._store.pending_candidates(limit=limit)
+
+    def confirm_candidate(self, cand_id: int) -> int:
+        """用户点「记住」：候选转正，返回 memory id（无效或已决策返回 0）。"""
+        return self._store.confirm_candidate(cand_id)
+
+    def reject_candidate(self, cand_id: int) -> bool:
+        """用户点「不用记」：标记 rejected，此后同内容不再打扰。"""
+        return self._store.reject_candidate(cand_id)
 
     # ----- Agent 状态（persona_state，与用户记忆分表） -----
     def state(self) -> Dict[str, object]:

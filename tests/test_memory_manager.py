@@ -1,6 +1,7 @@
-"""MemoryManager（Step 2.2 中间层）单测：只覆盖对话记录闭环。
+"""MemoryManager 中间层单测。
 
-检索 / 手动记忆写入 / LLM 抽取不在本步，故不在此测试。
+Step 2.2 覆盖对话记录闭环；Step 2.3 覆盖手动记忆与人工确认队列。
+检索（2.4）/ Prompt 注入（2.5）/ LLM 抽取（2.7）不在本步，故不在此测试。
 """
 import pytest
 
@@ -81,3 +82,114 @@ def test_manager_never_touches_sql_directly(mgr):
     """分层守卫：Agent 只能通过本层拿数据，管理器不得暴露连接对象。"""
     assert not hasattr(mgr, "_conn")
     assert not hasattr(mgr, "execute")
+
+
+# ---------- Step 2.3：手动记忆 ----------
+
+
+def test_remember_and_list(mgr):
+    mid = mgr.remember("fact", "  用户养了一只猫  ", importance=7)
+    assert mid > 0
+    rows = mgr.list_memories()
+    assert len(rows) == 1
+    assert rows[0]["content"] == "用户养了一只猫"  # 前后空白被清掉
+    assert rows[0]["importance"] == 7
+
+
+def test_remember_rejects_blank_and_bad_type(mgr):
+    assert mgr.remember("fact", "   ") == 0
+    with pytest.raises(ValueError):
+        mgr.remember("nonsense", "内容")
+
+
+def test_remember_clamps_out_of_range_weights(mgr):
+    mid = mgr.remember("goal", "越界权重", importance=99, confidence=-3)
+    row = mgr.list_memories()[0]
+    assert row["id"] == mid
+    assert row["importance"] == 10
+    assert row["confidence"] == 1
+
+
+def test_blacklist_blocks_write_at_entry(mgr, store):
+    store.add_blacklist("身份证")
+    assert mgr.remember("fact", "我的身份证号是123") == 0
+    assert mgr.list_memories() == []  # 根本没落盘，而不是检索时才过滤
+
+
+def test_edit_and_confirm_memory(mgr):
+    mid = mgr.remember("fact", "喜欢狗")
+    assert mgr.edit_memory(mid, content="喜欢猫", importance=8) is True
+    assert mgr.list_memories()[0]["content"] == "喜欢猫"
+    assert mgr.confirm_memory(mid) is True
+    with pytest.raises(ValueError):
+        mgr.edit_memory(mid, type="nonsense")
+
+
+def test_forget_id_removes_single_without_blacklist(mgr):
+    mid = mgr.remember("fact", "临时的事")
+    assert mgr.forget_id(mid) is True
+    assert mgr.list_memories() == []
+    assert mgr.blacklist() == []
+
+
+def test_forget_keyword_deletes_blacklists_and_purges_queue(mgr):
+    mgr.remember("fact", "秘密计划A")
+    mgr.propose("event", "秘密计划B")
+    mgr.propose("event", "公开计划C")
+
+    # 返回值 = 正表 1 条 + 队列 1 条，反映用户视角的总影响面
+    assert mgr.forget("秘密") == 2
+    assert mgr.list_memories() == []
+    assert "秘密" in mgr.blacklist()
+    # 队列里同主题的待确认项必须一并清掉，否则还会再问一次
+    assert [c["content"] for c in mgr.pending_candidates()] == ["公开计划C"]
+    # 之后同主题内容再也写不进来
+    assert mgr.remember("fact", "另一个秘密") == 0
+    assert mgr.propose("event", "又一个秘密") == 0
+
+
+# ---------- Step 2.3：人工确认队列 ----------
+
+
+def test_propose_then_confirm_enters_memory(mgr):
+    cid = mgr.propose("preference", "喜欢机械键盘", importance=6, reason="提过两次")
+    assert cid > 0
+    assert mgr.list_memories() == []  # 确认前绝不进正表
+
+    mid = mgr.confirm_candidate(cid)
+    assert mid > 0
+    assert mgr.list_memories()[0]["content"] == "喜欢机械键盘"
+    assert mgr.pending_candidates() == []
+
+
+def test_rejected_candidate_does_not_nag(mgr):
+    cid = mgr.propose("preference", "喜欢晴天")
+    assert mgr.reject_candidate(cid) is True
+    assert mgr.propose("preference", "喜欢晴天") == 0
+    assert mgr.pending_candidates() == []
+    assert mgr.list_memories() == []
+
+
+def test_propose_validates_type_and_blank(mgr):
+    assert mgr.propose("fact", "  ") == 0
+    with pytest.raises(ValueError):
+        mgr.propose("nonsense", "内容")
+
+
+def test_confirm_invalid_candidate_returns_zero(mgr):
+    assert mgr.confirm_candidate(9999) == 0
+    assert mgr.reject_candidate(9999) is False
+
+
+def test_forget_counts_queue_only_hits(mgr):
+    """只在队列里、尚未确认的内容被遗忘时，也要报告非零影响面。"""
+    mgr.propose("event", "秘密安排")
+    assert mgr.forget("秘密") == 1
+    assert mgr.pending_candidates() == []
+
+
+def test_forget_blank_keyword_is_noop(mgr):
+    mgr.remember("fact", "保留这条")
+    assert mgr.forget("   ") == 0
+    assert mgr.blacklist() == []  # 不得把空串写进黑名单（会拦截一切）
+    assert len(mgr.list_memories()) == 1
