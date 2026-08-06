@@ -24,6 +24,7 @@ import flet as ft  # noqa: E402
 from config import ConfigError, load_settings  # noqa: E402
 from core.agent import Agent  # noqa: E402
 from core.llm_client import DeepSeekLLMClient  # noqa: E402
+from core.memory import MemoryManager, SQLiteMemoryStore, get_embedder  # noqa: E402
 from core.persona import load_persona  # noqa: E402
 from ui.components.chat_area import ChatArea  # noqa: E402
 from ui.components.header import Header  # noqa: E402
@@ -69,6 +70,23 @@ class AssistantApp:
             return
 
         self.avatar_provider = TextAvatarProvider(text="阿", bgcolor=c.PRIMARY, text_color=c.ON_PRIMARY)
+        # 记忆系统：启用时才建（MEMORY_ENABLED=1）。失败不致命——助手退回纯内存。
+        memory = None
+        if settings.memory_enabled:
+            try:
+                store = SQLiteMemoryStore(settings.memory_db_path)
+                embedder = get_embedder(
+                    backend=settings.embedding_backend,
+                    model_name=settings.embedding_model,
+                    device=settings.embedding_device,
+                )
+                memory = MemoryManager(store, embedder=embedder)
+                # 启动时为存量 / 换模型后失效的记忆补向量（空库直接返回 0，不触发模型加载）
+                memory.reindex()
+            except Exception:  # noqa: BLE001
+                logger.exception("记忆系统初始化失败，助手将以纯内存模式运行")
+                memory = None
+
         self.agent = Agent(
             persona=persona,
             llm=DeepSeekLLMClient(
@@ -81,6 +99,9 @@ class AssistantApp:
             ),
             history_limit=settings.history_limit,
             on_phase=self._on_phase,
+            memory=memory,
+            on_retrieval=self._on_retrieval,
+            memory_top_k=settings.memory_top_k,
         )
 
         self._setup_page(persona)
@@ -111,7 +132,7 @@ class AssistantApp:
         self.persona_status = PersonaStatusPanel(persona, avatar_provider=self.avatar_provider)
         self.chat_area = ChatArea(persona, avatar_provider=self.avatar_provider)
         self.input_bar = InputBar(on_send=self._on_send)
-        self.memory_panel = MemoryPanel(persona)
+        self.memory_panel = MemoryPanel(persona, memory=memory)
 
         self.middle = ft.Column(
             [self.chat_area, self.input_bar],
@@ -209,6 +230,25 @@ class AssistantApp:
         """由 Agent 阶段事件驱动思考态检索进度（RAG 可视化）。"""
         if self.chat_area is not None:
             self.chat_area.set_phase(phase)
+
+    def _on_retrieval(self, hits) -> None:
+        """检索命中回调：把本轮想起的记忆交给记忆面板高亮（清债 #2，占位钩子落地）。
+
+        该回调运行在后台 worker 线程（Agent.reply 经 page.run_thread 执行），
+        直接用 Flet 控件更新会跨线程操作 UI。这里通过 page.run_task 把更新
+        调度回主事件循环，避免线程竞争。主线程场景下 run_task 同样安全。
+        """
+        panel = self.memory_panel
+        if panel is None or self.page is None:
+            return
+
+        async def _apply() -> None:
+            panel.set_active_memories(hits)
+
+        try:
+            self.page.run_task(_apply)
+        except Exception:  # noqa: BLE001 - 退化：直接调用（主线程/测试场景）
+            panel.set_active_memories(hits)
 
     def _on_send(self, text: str) -> None:
         assert self.chat_area is not None and self.input_bar is not None and self.header is not None

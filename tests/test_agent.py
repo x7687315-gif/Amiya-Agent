@@ -3,6 +3,7 @@ import pytest
 from core.agent import Agent
 from core.llm_client import DeepSeekLLMClient
 from core.memory import MemoryManager, SQLiteMemoryStore
+from core.memory.embedder import HashingEmbedder
 from core.persona import load_persona
 
 
@@ -141,3 +142,54 @@ def test_deepseek_client_constructable():
     c = DeepSeekLLMClient(api_key="sk-x", base_url="https://api.deepseek.com/v1")
     assert c.url == "https://api.deepseek.com/v1/chat/completions"
     assert c.model == "deepseek-chat"
+
+
+# ----- Step 2.4：记忆检索 + Prompt 注入闭环 -----
+
+
+class CaptureLLM:
+    """记录收到的 system 提示词，不真正请求网络。"""
+
+    def __init__(self, reply="用户，我记得哦。"):
+        self.reply = reply
+        self.last_system = ""
+
+    def stream_chat(self, system, history):
+        self.last_system = system
+        yield self.reply
+
+
+def test_agent_injects_memory_into_prompt(store):
+    mgr = MemoryManager(store, embedder=HashingEmbedder(dim=128))
+    mgr.remember("fact", "用户养了一只橘猫", importance=8, confidence=5)
+    mgr.reindex()
+
+    captured = []
+    llm = CaptureLLM()
+    agent = Agent(
+        persona=load_persona(),
+        llm=llm,
+        memory=mgr,
+        memory_top_k=3,
+        on_retrieval=lambda hs: captured.extend(hs),
+    )
+    "".join(agent.reply("我的猫怎么样了"))
+
+    # 1) Agent 真的去检索了
+    assert captured, "Agent 应当检索到记忆"
+    # 2) 检索命中被注入发给 LLM 的 system 提示词（定界、无分数）
+    assert "【相关记忆】" in llm.last_system
+    assert "橘猫" in llm.last_system
+    assert "score=" not in llm.last_system
+
+
+def test_agent_retrieval_failure_does_not_break_chat(store):
+    class BrokenMemory(MemoryManager):
+        def retrieve(self, query, *, top_k=5):
+            raise RuntimeError("retrieval down")
+
+    mgr = BrokenMemory(store)
+    agent = Agent(persona=load_persona(), llm=CaptureLLM(), memory=mgr)
+    out = "".join(agent.reply("你好"))
+    assert out == "用户，我记得哦。"  # 检索失败只降级，对话照常
+

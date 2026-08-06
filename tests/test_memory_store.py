@@ -238,9 +238,14 @@ def test_migration_v1_db_upgrades_to_v2(tmp_path):
 
     s = SQLiteMemoryStore(db)
     try:
-        assert s._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        # v1 库再次打开应平滑升级到当前最新版本（Step 2.4 后为 v3），原数据不丢
+        from core.memory.store import SCHEMA_VERSION
+
+        assert s._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert s.memories(types=("fact",))[0]["content"] == "旧库里的记忆"
         assert s.add_candidate("fact", "升级后可用") > 0  # v2 新表已建
+        # v3 新增的向量列也应就绪（建表时 v1 经 ALTER 补列）
+        assert s.vector_of(1) is None  # 旧记忆尚无向量，待 reindex 补算
     finally:
         s.close()
 

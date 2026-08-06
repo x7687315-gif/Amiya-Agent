@@ -39,6 +39,10 @@ class Settings:
     history_limit: int  # 短期记忆保留的"轮数"上限（每轮 = 1 用户 + 1 助手）
     memory_enabled: bool  # 关闭后 Agent 退回纯内存模式（Phase 1 行为）
     memory_db_path: str  # 长期记忆 SQLite 位置（data/ 已在 .gitignore）
+    embedding_backend: str  # 嵌入后端：auto / local / hashing
+    embedding_model: str  # 嵌入模型名（默认 bge-small-zh-v1.5，中文场景）
+    embedding_device: str  # 推理设备：cpu / cuda
+    memory_top_k: int  # 每轮注入提示词的最相关记忆条数
 
 
 def load_settings() -> Settings:
@@ -58,4 +62,10 @@ def load_settings() -> Settings:
         history_limit=int(os.getenv("HISTORY_LIMIT", "20")),
         memory_enabled=_env_bool("MEMORY_ENABLED", True),
         memory_db_path=(os.getenv("MEMORY_DB_PATH") or "data/assistant.db").strip(),
+        embedding_backend=(os.getenv("EMBEDDING_BACKEND") or "auto").strip(),
+        embedding_model=(
+            os.getenv("EMBEDDING_MODEL") or "BAAI/bge-small-zh-v1.5"
+        ).strip(),
+        embedding_device=(os.getenv("EMBEDDING_DEVICE") or "cpu").strip(),
+        memory_top_k=int(os.getenv("MEMORY_TOP_K", "5")),
     )

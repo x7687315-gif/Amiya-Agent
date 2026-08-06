@@ -7,16 +7,15 @@ Responsibility：人格加载 → 提示词拼装 → 调 LLM 流式 → 维护�
 本层**不认识 SQL、不认识 store**，只依赖中间层的 add_turn / recent_turns。
 
 阶段事件（on_phase）：在流式回复前发出 retrieving / reasoning 阶段，
-供 UI 展示 RAG 检索过程。真检索（Step 2.4）接入前用模拟序列保证视觉完整，
-届时自然替换为真实阶段回调，UI 无需改动。
+供 UI 展示 RAG 检索过程。retrieving 阶段由真实的 MemoryManager.retrieve()
+驱动——UI 无需改动。
 
-Phase 2-A Step 2.2 边界：只做对话记录闭环。
-记忆检索（2.4）、Prompt 记忆注入（2.5）、LLM 自动抽取（2.7）均不在本步。
+Prompt 记忆注入（Step 2.5）：检索命中经 PromptBuilder 定界注入系统提示词，
+让助手「想得起」长期记忆。LLM 自动抽取（2.7）仍不在本步。
 """
 from __future__ import annotations
 
 import logging
-import time
 from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional
 
 from .llm_client import LLMClient
@@ -24,7 +23,7 @@ from .persona import Persona
 from .prompt_builder import PromptBuilder
 
 if TYPE_CHECKING:  # 仅类型标注，运行期不强制依赖记忆包
-    from .memory.manager import MemoryManager
+    from .memory.manager import MemoryManager, RetrievalHit
 
 log = logging.getLogger(__name__)
 
@@ -41,11 +40,15 @@ class Agent:
         on_phase: Optional[PhaseCallback] = None,
         memory: "Optional[MemoryManager]" = None,
         restore_history: bool = True,
+        on_retrieval: "Optional[Callable[[List[RetrievalHit]], None]]" = None,
+        memory_top_k: int = 5,
     ) -> None:
         """
         memory: 记忆中间层。为 None 时行为与 Phase 1 完全一致（纯内存、不落盘），
                 因此现有调用方与测试无需改动。
         restore_history: 冷启动时是否从库里回填短期窗口（"记得住"的最小体现）。
+        on_retrieval: 检索命中回调（Step 2.6 的 UI 钩子），把命中项交给记忆面板等。
+        memory_top_k: 每轮检索返回并注入提示词的最相关记忆条数。
         """
         self.persona = persona
         self.llm = llm
@@ -54,6 +57,8 @@ class Agent:
         self.history_limit = history_limit
         self._on_phase = on_phase
         self._memory = memory
+        self._on_retrieval = on_retrieval
+        self._memory_top_k = memory_top_k
         self._history: List[Dict[str, str]] = []  # 短期窗口（喂给 LLM 的上下文）
         self.memory_degraded = False  # 记忆写入是否发生过失败（UI 可据此提示）
         if memory is not None and restore_history:
@@ -103,15 +108,32 @@ class Agent:
         self._remember("user", user_text)
         window = self._history[-(self.history_limit * 2) :]
 
-        # 阶段事件：检索 → 推理（真检索 Step 2.4 接入前为模拟序列，UI 可视化用）
+        # 真实检索阶段（Step 2.4 接入）：用用户本轮的话去翻长期记忆
+        hits: List[RetrievalHit] = []
+        if self._memory is not None:
+            if self._on_phase is not None:
+                self._on_phase("retrieving")
+            try:
+                hits = self._memory.retrieve(user_text, top_k=self._memory_top_k)
+            except Exception as e:  # noqa: BLE001 - 检索失败只降级，不阻断对话
+                log.warning("记忆检索失败：%s", e)
         if self._on_phase is not None:
-            self._on_phase("retrieving")
-            time.sleep(0.45)
             self._on_phase("reasoning")
-            time.sleep(0.45)
+
+        # 把检索到的记忆注入系统提示词（定界包裹防注入，不含分数）
+        # 经 MemoryManager.format_block 渲染——编排层不直接依赖 retrieval 子层
+        memory_block = self._memory.format_block(hits) if self._memory is not None else ""
+        system_prompt = self.prompt_builder.build_system(memory_block)
+
+        # on_retrieval 回调：把命中项交给 2.6 的 UI（thinking overlay / 记忆面板）
+        if self._on_retrieval is not None and hits:
+            try:
+                self._on_retrieval(hits)
+            except Exception as e:  # noqa: BLE001
+                log.warning("on_retrieval 回调异常：%s", e)
 
         full: str = ""
-        for delta in self.llm.stream_chat(self.system_prompt, window):
+        for delta in self.llm.stream_chat(system_prompt, window):
             full += delta
             yield delta
         if full.strip():

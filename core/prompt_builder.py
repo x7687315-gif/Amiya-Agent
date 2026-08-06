@@ -5,7 +5,7 @@ Phase 1 只拼「静态人格」（身份 + 世界观 + 价值观 + 关系 + 语
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from .persona import Persona
 
@@ -14,7 +14,7 @@ class PromptBuilder:
     def __init__(self, persona: Persona) -> None:
         self.persona = persona
 
-    def build_system(self) -> str:
+    def build_system(self, memory_block: Optional[str] = None) -> str:
         p = self.persona
         idn = p.identity
         sp = p.speech
@@ -27,6 +27,16 @@ class PromptBuilder:
             "请完全以她的视角、身份与口吻回应，不要跳出角色，"
             "不要声明自己是 AI、助手或语言模型。"
         )
+
+        # 2（可选）. 长期记忆注入（Step 2.4）：检索到相关记忆才追加
+        # 放在身份之下、其余人格段落之上——记忆是上下文，不盖过身份。
+        if memory_block:
+            parts.append(
+                "【相关记忆】\n"
+                + memory_block
+                + "\n以上是你长期记得的、与用户有关的事。当它们与当前对话相关时自然呼应，"
+                "不要生硬提及；若与用户当下的说法冲突，以用户当下的表达为准。"
+            )
 
         # 2. 世界观
         worldview = idn.get("worldview")

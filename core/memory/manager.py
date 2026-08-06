@@ -11,10 +11,18 @@ Step 2.2 落地「对话记录闭环」：写 conversation、恢复短期上下�
 Step 2.3 追加「手动记忆 + 人工确认」：记忆的增 / 改 / 删 / 列举，以及
 候选队列（propose → 用户确认 → 才进正表）。**本步不调用任何 LLM。**
 
+Step 2.4 落地「记忆读取闭环」：可替换 Embedder（默认 bge-small-zh-v1.5，
+纯 stdlib 哈希回退）+ 五通道混合检索（vector/keyword/recency/importance/confidence）
++ MemoryManager.retrieve()/memory_block()/format_block()/reindex()。写入记忆时同步建向量。
+
+Step 2.5 落地「Prompt 记忆注入」：检索命中经 PromptBuilder 定界注入系统提示词
+（见 agent.py，编排层只认 MemoryManager.format_block，不直接依赖 retrieval 子层）。
+
+Step 2.6 落地「UI 记忆管理面板」：MemoryPanel 通过本层 list_memories() /
+pending_candidates() 取数，confirm_candidate / reject_candidate / forget_id 改数据，
+set_active_memories 高亮本轮命中——UI 不碰 store，严守分层。
+
 刻意**不在本步**实现（按冻结文档构建顺序，防止提前复杂化）：
-- 向量与 retrieve() 检索            → Step 2.4
-- Prompt 记忆注入                   → Step 2.5
-- UI 记忆管理面板                   → Step 2.6
 - LLM 自动抽取 process_queue()      → Step 2.7
 """
 from __future__ import annotations
@@ -25,6 +33,8 @@ from typing import Dict, List, Optional, Sequence
 from uuid import uuid4
 
 from .store import MEMORY_TYPES, MemoryStore
+from .embedder import Embedder
+from .retrieval import MemoryRetriever, RetrievalHit, format_memory_block
 
 log = logging.getLogger(__name__)
 
@@ -57,9 +67,16 @@ class MemoryManager:
         store: MemoryStore,
         *,
         session_id: Optional[str] = None,
+        embedder: Optional[Embedder] = None,
     ) -> None:
         self._store = store
         self._session_id = session_id or new_session_id()
+        # 嵌入层可选：传了就启用向量检索，不传则退化为关键词/权重检索（仍可跑）。
+        # 这样「没装 sentence-transformers 的环境」也能完整使用记忆系统。
+        self._embedder = embedder
+        self._retriever = (
+            MemoryRetriever(store, embedder) if embedder is not None else None
+        )
 
     # ----- 会话 -----
     @property
@@ -125,13 +142,17 @@ class MemoryManager:
         if self._store.is_blacklisted(text):
             log.info("记忆被黑名单拦截，未写入: %s", text[:30])
             return 0
-        return self._store.upsert_memory(
+        mem_id = self._store.upsert_memory(
             type,
             text,
             confidence=_clamp(confidence, 1, 5),
             importance=_clamp(importance, 1, 10),
             source_msg_id=source_msg_id,
         )
+        # 写入记忆时同步建向量：避开「先写后索引」的遗忘窗口——
+        # 否则用户刚说「记住这个」，下一轮检索却命中不了。
+        self._build_vector(mem_id, text)
+        return mem_id
 
     def list_memories(
         self, types: Sequence[str] = MEMORY_TYPES, limit: int = 20
@@ -190,6 +211,66 @@ class MemoryManager:
     def blacklist(self) -> List[str]:
         return self._store.blacklist()
 
+    # ----- 检索（Step 2.4） -----
+    def _build_vector(self, mem_id: int, content: str) -> None:
+        """把一条记忆编码成向量并落库；失败只降级，绝不阻断记忆写入。"""
+        if self._embedder is None:
+            return
+        try:
+            vecs = self._embedder.encode([content])
+        except Exception as e:  # noqa: BLE001 - 嵌入不可用只降级
+            log.warning("向量构建失败 (mem_id=%s)：%s", mem_id, e)
+            return
+        if vecs:
+            self._store.save_vector(mem_id, self._embedder.name, vecs[0])
+
+    def retrieve(self, query: str, *, top_k: int = 5) -> List[RetrievalHit]:
+        """按混合分检索最相关记忆；未启用嵌入层时返回空列表。
+
+        任何检索异常都被吞掉降级为空结果——"想起往事"失败时，
+        宁可助手这一轮不引用记忆，也不能让整段对话崩掉。
+        """
+        if self._retriever is None:
+            return []
+        try:
+            return self._retriever.retrieve(query, top_k=top_k)
+        except Exception as e:  # noqa: BLE001
+            log.warning("记忆检索失败：%s", e)
+            return []
+
+    def memory_block(self, query: str, *, top_k: int = 5) -> str:
+        """检索并把命中渲染成可注入提示词的段落（已剔除分数）。"""
+        return format_memory_block(self.retrieve(query, top_k=top_k))
+
+    def format_block(self, hits: List[RetrievalHit]) -> str:
+        """把已算好的命中渲染成可注入提示词的段落（已剔除分数）。
+
+        存在意义是分层：Agent 编排层**不该**知道 retrieval.format_memory_block
+        这个子层函数——它只认 MemoryManager。通过本方法，agent.py 不再
+        直接 import core.memory.retrieval（见 Step 2.6 清债 #1）。
+        """
+        return format_memory_block(hits)
+
+    def reindex(self, limit: int = 200) -> int:
+        """为缺失 / 失效向量补算。换嵌入模型、或存量记忆未建向量时调用。
+
+        返回实际建好的向量条数，便于日志与 Inspector 展示进度。
+        """
+        if self._embedder is None:
+            return 0
+        rows = self._store.memories_missing_vector(self._embedder.name, limit=limit)
+        done = 0
+        for r in rows:
+            try:
+                vecs = self._embedder.encode([r["content"]])
+            except Exception as e:  # noqa: BLE001
+                log.warning("reindex 向量失败 (mem_id=%s)：%s", r["id"], e)
+                continue
+            if vecs:
+                self._store.save_vector(r["id"], self._embedder.name, vecs[0])
+                done += 1
+        return done
+
     # ----- 候选队列（人工确认闸门） -----
     def propose(
         self,
@@ -226,8 +307,17 @@ class MemoryManager:
         return self._store.pending_candidates(limit=limit)
 
     def confirm_candidate(self, cand_id: int) -> int:
-        """用户点「记住」：候选转正，返回 memory id（无效或已决策返回 0）。"""
-        return self._store.confirm_candidate(cand_id)
+        """用户点「记住」：候选转正，返回 memory id（无效或已决策返回 0）。
+
+        转正后立刻补向量：候选转正走的是 store 直写、不经过 remember()，
+        若不在这里补，这批记忆会一直缺向量，直到某次 reindex() 才被唤醒。
+        """
+        mem_id = self._store.confirm_candidate(cand_id)
+        if mem_id:
+            row = self._store.memory(mem_id)
+            if row:
+                self._build_vector(mem_id, row["content"])
+        return mem_id
 
     def reject_candidate(self, cand_id: int) -> bool:
         """用户点「不用记」：标记 rejected，此后同内容不再打扰。"""

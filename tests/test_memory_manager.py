@@ -193,3 +193,26 @@ def test_forget_blank_keyword_is_noop(mgr):
     assert mgr.forget("   ") == 0
     assert mgr.blacklist() == []  # 不得把空串写进黑名单（会拦截一切）
     assert len(mgr.list_memories()) == 1
+
+
+# ---------- Step 2.6：经 MemoryManager 渲染注入段落（清债 #1 的落点）----------
+
+
+def test_format_block_renders_hits_without_scores(mgr):
+    from core.memory.retrieval import RetrievalHit
+
+    hits = [
+        RetrievalHit(
+            id=1, type="fact", content="用户养了一只橘猫",
+            importance=8, confidence=5, score=0.92,
+            channels={"vector": 0.3, "keyword": 0.2},
+        )
+    ]
+    rendered = mgr.format_block(hits)
+    assert "用户养了一只橘猫" in rendered
+    assert "事实" in rendered  # 类型标签随内容渲染
+    assert "score=" not in rendered  # 分数绝不能进提示词（防注入；定界包裹由 PromptBuilder 负责）
+
+
+def test_format_block_empty_is_blank(mgr):
+    assert mgr.format_block([]) == ""

@@ -11,9 +11,12 @@ Step 2.3 追加（schema v2）：
 - `memory_candidate` 人工确认队列 + 记忆按 id 的改 / 删 / 确认
 - 迁移改为版本链，已装机的 v1 库可平滑升级
 
-V1 预留但暂不参与逻辑的字段：
+Step 2.4 追加（schema v3）：
+- `memory.embedding_model` / `embedding_dim`：向量的模型标记，跨模型不可比
+- `retrieval_rows` / `memories_missing_vector` / `bump_hits`：检索取数与命中计数
+
+预留但暂不参与逻辑的字段：
 - `memory.decay_rate` / `last_confirmed_at`：记忆衰减（Phase 2-C 后实现）
-- `save_vector` 的 `model` 参数：V1 单模型直写 BLOB；后续可迁到独立 vectors 表以支持多模型重嵌
 """
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ from typing import Dict, List, Optional, Protocol, Sequence, Tuple, runtime_chec
 
 MEMORY_TYPES = ("fact", "preference", "event", "goal", "relationship")
 CANDIDATE_STATUSES = ("pending", "confirmed", "rejected")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # persona_state 允许被 save_state 改写的字段（防止任意键写入）
 _STATE_FIELDS = {
@@ -115,11 +118,27 @@ CREATE TABLE IF NOT EXISTS memory_candidate(
 CREATE INDEX IF NOT EXISTS idx_cand_status ON memory_candidate(status, id DESC);
 """
 
+# v3（Step 2.4）：给向量打上「产出它的模型」标记。
+#
+# 为什么必须记模型：嵌入向量只在同一模型内可比。哈希回退是 256 维、
+# bge-small-zh-v1.5 是 512 维，用户换 EMBEDDING_BACKEND 之后，
+# 库里会同时存在两种向量。若不标记，检索要么维度对不上直接崩，
+# 要么（更糟）在同维度不同模型间算出一个看似正常、实则毫无意义的余弦值。
+# 有了标记，检索只认当前模型的向量，其余交给 reindex() 重算。
+_SCHEMA_V3 = """
+ALTER TABLE memory ADD COLUMN embedding_model TEXT;
+ALTER TABLE memory ADD COLUMN embedding_dim INTEGER;
+CREATE INDEX IF NOT EXISTS idx_mem_embmodel ON memory(embedding_model);
+"""
+
 # 版本链：按序执行所有「库版本 < 目标版本」的脚本。
-# 已装机的 v1 库再次打开时只会跑 v2，不会重放 v1。
+# 已装机的 v1 库再次打开时只会跑 v2/v3，不会重放 v1。
+# 注意 v3 用的是 ALTER（非幂等），因此绝不能把这两列补进 _SCHEMA_V1——
+# 那样全新库建表时已有该列，v3 会因重复列名而失败。
 _MIGRATIONS: Tuple[Tuple[int, str], ...] = (
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
+    (3, _SCHEMA_V3),
 )
 
 
@@ -179,6 +198,16 @@ class MemoryStore(Protocol):
     def bump_companionship(self, seconds: int) -> int: ...
     def save_vector(self, mem_id: int, model: str, vec: Sequence[float]) -> None: ...
     def vector_of(self, mem_id: int) -> Optional[List[float]]: ...
+    def retrieval_rows(
+        self,
+        types: Sequence[str] = MEMORY_TYPES,
+        limit: int = 500,
+        model: Optional[str] = None,
+    ) -> List[Dict[str, object]]: ...
+    def memories_missing_vector(
+        self, model: str, limit: int = 200
+    ) -> List[Dict[str, object]]: ...
+    def bump_hits(self, mem_ids: Sequence[int]) -> None: ...
     def add_blacklist(self, keyword: str) -> None: ...
     def is_blacklisted(self, text: str) -> bool: ...
     def delete_by_keyword(self, keyword: str) -> int: ...
@@ -342,6 +371,10 @@ class SQLiteMemoryStore:
         if not pairs:
             return False
         sets = ", ".join(f"{k}=?" for k, _ in pairs)
+        # 正文一改，旧向量描述的就是旧内容了。留着它会让检索按「用户已经改掉的
+        # 说法」去匹配，且完全静默。这里直接作废，交给 reindex() 重算。
+        if content is not None:
+            sets += ", embedding=NULL, embedding_model=NULL, embedding_dim=NULL"
         now = datetime.now().isoformat()
         with self._lock:
             cur = self._conn.execute(
@@ -610,12 +643,20 @@ class SQLiteMemoryStore:
             self._conn.commit()
             return current
 
-    # ----- 向量（V1 直写 BLOB；model 参数预留多模型重嵌） -----
+    # ----- 向量（直写 BLOB + 模型标记） -----
     def save_vector(self, mem_id: int, model: str, vec: Sequence[float]) -> None:
+        """写入向量并记录产出它的模型与维度。
+
+        单表 BLOB 而非独立 vectors 表：个人陪伴场景记忆量在千级，
+        一行一向量足够，且省掉一次 JOIN 与一致性维护。若将来要支持
+        「同一条记忆并存多模型向量」，再拆表并把本方法改为 upsert。
+        """
         blob = array.array("f", vec).tobytes()
         with self._lock:
             self._conn.execute(
-                "UPDATE memory SET embedding=? WHERE id=?", (blob, mem_id)
+                "UPDATE memory SET embedding=?, embedding_model=?, embedding_dim=? "
+                "WHERE id=?",
+                (blob, model, len(blob) // 4, mem_id),
             )
             self._conn.commit()
 
@@ -627,6 +668,78 @@ class SQLiteMemoryStore:
         if not row or row["embedding"] is None:
             return None
         return list(array.array("f", row["embedding"]))
+
+    def retrieval_rows(
+        self,
+        types: Sequence[str] = MEMORY_TYPES,
+        limit: int = 500,
+        model: Optional[str] = None,
+    ) -> List[Dict[str, object]]:
+        """取候选集供检索层打分：正文 + 权重 + 时间 + （当前模型的）向量。
+
+        `model` 用于筛掉其它模型产出的向量：命中则返回浮点列表，
+        不命中则 vector=None，该条只走关键词 / 时间 / 权重通道，
+        不会因为维度不同而算出一个假的相似度。
+        """
+        if not types:
+            return []
+        placeholders = ",".join("?" * len(types))
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT id, type, content, confidence, importance, hits, "
+                f"created_at, updated_at, embedding, embedding_model FROM memory "
+                f"WHERE type IN ({placeholders}) "
+                f"ORDER BY importance DESC, updated_at DESC LIMIT ?",
+                (*types, limit),
+            ).fetchall()
+        out: List[Dict[str, object]] = []
+        for r in rows:
+            blob = r["embedding"]
+            usable = blob is not None and (model is None or r["embedding_model"] == model)
+            out.append(
+                {
+                    "id": r["id"],
+                    "type": r["type"],
+                    "content": r["content"],
+                    "confidence": r["confidence"],
+                    "importance": r["importance"],
+                    "hits": r["hits"],
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                    "vector": list(array.array("f", blob)) if usable else None,
+                }
+            )
+        return out
+
+    def memories_missing_vector(
+        self, model: str, limit: int = 200
+    ) -> List[Dict[str, object]]:
+        """列出当前模型下尚无可用向量的记忆（新写入的 + 换模型后作废的）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, content FROM memory "
+                "WHERE embedding IS NULL OR embedding_model IS NULL "
+                "   OR embedding_model <> ? "
+                "ORDER BY importance DESC, updated_at DESC LIMIT ?",
+                (model, limit),
+            ).fetchall()
+        return [{"id": r["id"], "content": r["content"]} for r in rows]
+
+    def bump_hits(self, mem_ids: Sequence[int]) -> None:
+        """累加命中次数。
+
+        只更新 hits，**不碰 updated_at**——被检索到不等于内容发生变化，
+        否则「最近更新」会被检索行为污染，recency 通道随即失真。
+        """
+        ids = [int(i) for i in mem_ids]
+        if not ids:
+            return
+        placeholders = ",".join("?" * len(ids))
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE memory SET hits=hits+1 WHERE id IN ({placeholders})", ids
+            )
+            self._conn.commit()
 
     # ----- memory_control -----
     def add_blacklist(self, keyword: str) -> None:

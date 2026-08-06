@@ -95,13 +95,25 @@ def test_persona_status_panel(persona):
 
 
 def test_memory_panel(persona):
-    panel = MemoryPanel(persona)
-    panel.set_long_term([("喜欢学习", 5)])
-    assert panel._long_term == [("喜欢学习", 5)]
-    panel.set_events([("8月6日", "测试事件")])
-    assert panel._events == [("8月6日", "测试事件")]
-    panel.set_goals(["完成 v2"])
-    assert panel._goals == ["完成 v2"]
+    from core.memory import MemoryManager, SQLiteMemoryStore
+
+    store = SQLiteMemoryStore(":memory:")
+    mgr = MemoryManager(store)
+    mgr.remember("fact", "用户喜欢爬山", importance=6)
+    mgr.remember("goal", "想学吉他", importance=5)
+    mgr.remember("event", "今天去了公园", importance=4)
+    mgr.propose("preference", "爱喝咖啡", reason="提过几次")
+
+    panel = MemoryPanel(persona, memory=mgr)
+    # 三个分区各至少 1 条记忆 + 1 条待确认候选
+    assert len(panel._long_term_col.controls) >= 1
+    assert len(panel._goals_col.controls) >= 1
+    assert len(panel._events_col.controls) >= 1
+    assert len(panel._cand_col.controls) >= 1
+
+    # 记忆功能未启用时只显示一条空态提示
+    disabled = MemoryPanel(persona, memory=None)
+    assert len(disabled._long_term_col.controls) == 1
 
 
 def test_thinking_overlay_phases():
