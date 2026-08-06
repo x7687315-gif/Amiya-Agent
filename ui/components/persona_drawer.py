@@ -7,14 +7,16 @@ import flet as ft
 
 from ui.theme import ALIGN_CENTER, c, t, sp, r
 from ui.components.avatar import make_avatar
+from ui.design.avatar_provider import AvatarProvider
 
 
 class PersonaDrawer(ft.NavigationDrawer):
     """右侧人格信息抽屉。"""
 
-    def __init__(self, persona) -> None:
+    def __init__(self, persona, avatar_provider: AvatarProvider | None = None) -> None:
         super().__init__()
         self.persona = persona
+        self._avatar_provider = avatar_provider
         self.bgcolor = c.SURFACE
         self.controls = self._build_content()
 
@@ -43,11 +45,12 @@ class PersonaDrawer(ft.NavigationDrawer):
                 content=ft.Column(
                     [
                         make_avatar(
-                            "阿",
-                            36,
-                            c.PRIMARY_LIGHT,
-                            text_color=c.PRIMARY,
+                            self._avatar_provider,
+                            state_key="calm",
+                            radius=36,
                             text_size=24,
+                            bgcolor=c.PRIMARY_LIGHT,
+                            text_color=c.PRIMARY,
                         ),
                         ft.Text(
                             self.persona.name,

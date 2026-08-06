@@ -5,12 +5,13 @@ import flet as ft
 
 from ui.theme import ALIGN_CENTER, c, t, sp, layout
 from ui.components.avatar import make_avatar
+from ui.design.avatar_provider import AvatarProvider
 
 
 class EmptyState(ft.Container):
     """首次打开或无消息时显示的欢迎区。"""
 
-    def __init__(self, persona) -> None:
+    def __init__(self, persona, avatar_provider: AvatarProvider | None = None) -> None:
         super().__init__()
         self.persona = persona
         self.alignment = ALIGN_CENTER
@@ -18,11 +19,12 @@ class EmptyState(ft.Container):
         self.content = ft.Column(
             [
                 make_avatar(
-                    layout.AI_AVATAR_TEXT,
-                    48,
-                    c.PRIMARY_LIGHT,
-                    text_color=c.PRIMARY,
+                    avatar_provider,
+                    state_key="calm",
+                    radius=48,
                     text_size=28,
+                    bgcolor=c.PRIMARY_LIGHT,
+                    text_color=c.PRIMARY,
                 ),
                 ft.Text(
                     f"{self.persona.address or '用户'}，欢迎回来。",

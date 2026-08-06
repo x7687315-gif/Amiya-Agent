@@ -7,20 +7,22 @@ import flet as ft
 
 from ui.theme import ALIGN_CENTER, c, sp, r, layout, anim
 from ui.components.chat_bubble import ChatBubble
-from ui.components.thinking_indicator import ThinkingIndicator
+from ui.components.thinking_overlay import ThinkingOverlay
 from ui.components.empty_state import EmptyState
+from ui.design.avatar_provider import AvatarProvider
 
 
 class ChatArea(ft.Container):
     """主聊天区，承载消息气泡与状态。"""
 
-    def __init__(self, persona) -> None:
+    def __init__(self, persona, avatar_provider: AvatarProvider | None = None) -> None:
         super().__init__()
         self.persona = persona
+        self._avatar_provider = avatar_provider
         self._has_messages = False
         self._auto_scroll = True
         self._thinking_indicator: ft.Control | None = None
-        self._empty_state = EmptyState(persona)
+        self._empty_state = EmptyState(persona, avatar_provider=avatar_provider)
 
         self._scroll_btn = self._build_scroll_btn()
         self._list = ft.ListView(
@@ -85,19 +87,24 @@ class ChatArea(ft.Container):
             self._list.controls.clear()
 
     def add_user(self, text: str) -> None:
-        """添加用户消息并显示思考指示器。"""
+        """添加用户消息并显示思考态覆盖层。"""
         self._ensure_message_list()
         self._append_fade(ChatBubble.user(text))
-        self._thinking_indicator = ThinkingIndicator()
+        self._thinking_indicator = ThinkingOverlay(self._avatar_provider)
         self._list.controls.append(self._thinking_indicator)
         self._list.update()
         self._scroll_if_auto()
+
+    def set_phase(self, phase: str) -> None:
+        """由 Agent 阶段事件驱动思考态检索进度（RAG 可视化）。"""
+        if isinstance(self._thinking_indicator, ThinkingOverlay):
+            self._thinking_indicator.set_phase(phase)
 
     def start_assistant(self) -> ft.Text:
         """开始助手回复，移除思考指示器并返回文本控件用于流式更新。"""
         self._remove_thinking()
         text_control = ft.Text("", color=c.TEXT_PRIMARY, size=14, selectable=True)
-        bubble = ChatBubble.assistant("", text_control=text_control)
+        bubble = ChatBubble.assistant("", text_control=text_control, avatar_provider=self._avatar_provider)
         self._append_fade(bubble)
         self._scroll_if_auto(layout.SCROLL_DURATION_FAST)
         return text_control

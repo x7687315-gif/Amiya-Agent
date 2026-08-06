@@ -7,15 +7,22 @@ import flet as ft
 
 from ui.theme import c, t, sp, r, layout, anim
 from ui.components.avatar import make_avatar
+from ui.design.avatar_provider import AvatarProvider
 
 
 class Header(ft.Container):
     """顶部栏，展示助手身份与当前状态。"""
 
-    def __init__(self, persona, on_persona_click: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        persona,
+        on_persona_click: Callable[[], None] | None = None,
+        avatar_provider: AvatarProvider | None = None,
+    ) -> None:
         super().__init__()
         self.persona = persona
         self.on_persona_click = on_persona_click
+        self._avatar_provider = avatar_provider
 
         self._status_text = ft.Text("在线", color=c.TEXT_MUTED, size=t.CAPTION)
         self._status_dot = self._build_dot()
@@ -48,7 +55,7 @@ class Header(ft.Container):
         self.height = layout.HEADER_HEIGHT
         self.content = ft.Row(
             [
-                make_avatar(layout.AI_AVATAR_TEXT, 20, c.PRIMARY, text_size=16),
+                make_avatar(self._avatar_provider, state_key="calm", radius=20, text_size=16),
                 ft.Column(
                     [
                         ft.Text(

@@ -5,6 +5,7 @@ import flet as ft
 
 from ui.theme import c, t, sp, r, layout
 from ui.components.avatar import make_avatar
+from ui.design.avatar_provider import AvatarProvider
 
 
 class ChatBubble:
@@ -43,6 +44,7 @@ class ChatBubble:
     def assistant(
         text: str,
         text_control: ft.Text | None = None,
+        avatar_provider: AvatarProvider | None = None,
         max_width_ratio: float = layout.AI_BUBBLE_MAX_RATIO,
     ) -> ft.Control:
         """助手气泡（左侧，白底描边）。
@@ -59,7 +61,7 @@ class ChatBubble:
         )
         return ft.Row(
             [
-                make_avatar(layout.AI_AVATAR_TEXT, 16, c.PRIMARY, text_size=13),
+                make_avatar(avatar_provider, state_key="calm", radius=16, text_size=13),
                 ft.Container(
                     content=content,
                     bgcolor=c.SURFACE,

@@ -4,9 +4,12 @@ from .chat_area import ChatArea
 from .chat_bubble import ChatBubble
 from .input_bar import InputBar
 from .persona_drawer import PersonaDrawer
-from .empty_state import EmptyState
+from .persona_status import PersonaStatusPanel
+from .memory_panel import MemoryPanel
+from .thinking_overlay import ThinkingOverlay
 from .thinking_indicator import ThinkingIndicator
-from .avatar import make_avatar
+from .empty_state import EmptyState
+from .avatar import make_avatar, make_user_avatar
 
 __all__ = [
     "Header",
@@ -14,7 +17,11 @@ __all__ = [
     "ChatBubble",
     "InputBar",
     "PersonaDrawer",
-    "EmptyState",
+    "PersonaStatusPanel",
+    "MemoryPanel",
+    "ThinkingOverlay",
     "ThinkingIndicator",
+    "EmptyState",
     "make_avatar",
+    "make_user_avatar",
 ]

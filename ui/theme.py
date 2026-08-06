@@ -1,7 +1,7 @@
 """Design Token：assistant-agent 视觉系统。
 
 所有 UI 组件必须从此模块导入样式常量，禁止硬编码色值/字号/间距。
-风格：浅色背景 + 几何极简主义 + 细描边 + 少阴影。
+风格：浅色背景 + 几何极简主义 + 细描边 + 少阴影 + 本地（舰桥）基调。
 """
 from __future__ import annotations
 
@@ -41,6 +41,19 @@ class Colors:
     ERROR: str = "#EF4444"  # 错误提示
     ERROR_SURFACE: str = "#FEF2F2"  # 错误提示背景
     SHADOW: str = "rgba(31, 31, 46, 0.12)"  # 悬浮按钮等轻微投影
+
+    # —— 情绪状态色（左栏状态 + 头像切换）——
+    STATE_CALM: str = "#8FBF9F"  # 平静·绿
+    STATE_THINKING: str = "#7C6BC4"  # 思考·紫（复用主色）
+    STATE_WORRIED: str = "#E0A458"  # 担忧·琥珀
+    STATE_HAPPY: str = "#E58FA8"  # 愉悦·粉
+
+    # —— 信赖度（进度条两端）——
+    TRUST_LOW: str = "#C9C3E0"
+    TRUST_HIGH: str = "#7C6BC4"
+
+    # —— 舰桥强调（极淡青，仅分隔线/光晕，克制使用）——
+    BRIDGE_ACCENT: str = "#7FB8C4"
 
 
 @dataclass(frozen=True)
@@ -87,16 +100,19 @@ class Layout:
 
     HEADER_HEIGHT: int = 64
     INPUT_BAR_MIN_HEIGHT: int = 72
-    WINDOW_WIDTH: int = 520
-    WINDOW_HEIGHT: int = 800
-    WINDOW_MIN_WIDTH: int = 400
-    WINDOW_MIN_HEIGHT: int = 600
+    WINDOW_WIDTH: int = 1180  # v2 三栏默认宽度
+    WINDOW_HEIGHT: int = 760
+    WINDOW_MIN_WIDTH: int = 960  # 固定最小宽度，窄屏不降级
+    WINDOW_MIN_HEIGHT: int = 640
     DRAWER_WIDTH: int = 320
     DRAWER_MAX_WIDTH_RATIO: float = 0.7
     USER_BUBBLE_MAX_RATIO: float = 0.75
     AI_BUBBLE_MAX_RATIO: float = 0.78
     AI_AVATAR_TEXT: str = "阿"
     USER_AVATAR_TEXT: str = "博"
+    LEFT_COL_WIDTH: int = 260  # 左栏固定宽
+    RIGHT_COL_WIDTH: int = 300  # 右栏固定宽
+    COLUMN_GAP: int = 0  # 栏间用 1px 描边分隔，不做间距
 
     # 交互常量（避免在组件中散落魔法数）
     INPUT_MAX_LENGTH: int = 2000
@@ -116,6 +132,20 @@ class Animations:
     EASE_OUT: str = "easeOut"
     EASE_IN_OUT: str = "easeInOut"
 
+    STAGGER: int = 80  # 三栏入场依次延迟
+    PULSE_MS: int = 1200  # 状态点脉冲周期（文档约定；脉冲经 animate_opacity 实现）
+    BREATH_MS: int = 8000  # 背景光晕呼吸周期
+
+
+@dataclass(frozen=True)
+class EmotionState:
+    """情绪状态（供左栏状态与头像切换）。"""
+
+    key: str
+    emoji: str
+    label: str
+    color: str
+
 
 # 便捷导入别名
 c = Colors()
@@ -124,3 +154,13 @@ sp = Spacing()
 r = Radius()
 layout = Layout()
 anim = Animations()
+
+# 情绪状态映射（须在 c 定义后，因引用 c.STATE_*）
+EMOTIONS: dict[str, EmotionState] = {
+    "calm": EmotionState("calm", "🌱", "平静", c.STATE_CALM),
+    "thinking": EmotionState("thinking", "🤔", "思考", c.STATE_THINKING),
+    "worried": EmotionState("worried", "😟", "担忧", c.STATE_WORRIED),
+    "happy": EmotionState("happy", "🙂", "愉悦", c.STATE_HAPPY),
+}
+
+DEFAULT_EMOTION = "calm"
