@@ -20,3 +20,7 @@ voices/
 # 安装日志 / 备份
 install.log
 *.bak
+
+# IDE
+.idea/
+.vscode/

@@ -1,5 +1,8 @@
+import pytest
+
 from core.agent import Agent
 from core.llm_client import DeepSeekLLMClient
+from core.memory import MemoryManager, SQLiteMemoryStore
 from core.persona import load_persona
 
 
@@ -9,6 +12,21 @@ class FakeLLM:
 
     def stream_chat(self, system, history):
         yield self.reply
+
+
+class BoomLLM:
+    """模拟网络中断：用户消息已落库，但没有助手回复。"""
+
+    def stream_chat(self, system, history):
+        raise RuntimeError("network down")
+        yield ""  # pragma: no cover
+
+
+@pytest.fixture()
+def store():
+    s = SQLiteMemoryStore(":memory:")
+    yield s
+    s.close()
 
 
 def test_reply_streams_and_updates_history():
@@ -33,6 +51,89 @@ def test_reset_clears_history():
     "".join(agent.reply("hi"))
     agent.reset()
     assert agent._history == []
+
+
+# ----- Phase 2-A Step 2.2：记忆闭环 -----
+
+
+def test_reply_persists_both_turns(store):
+    agent = Agent(
+        persona=load_persona(), llm=FakeLLM(), memory=MemoryManager(store)
+    )
+    "".join(agent.reply("你好"))
+    rows = store.recent_messages(limit=10)
+    assert [r["role"] for r in rows] == ["user", "assistant"]
+    assert rows[1]["content"] == "用户，助手一直都在哦。"
+    assert store.load_state()["total_turns"] == 1
+    assert agent.memory_degraded is False
+
+
+def test_cold_start_restores_history(store):
+    first = Agent(persona=load_persona(), llm=FakeLLM(), memory=MemoryManager(store))
+    "".join(first.reply("我叫用户"))
+
+    # 模拟重启：新 Agent、新 Manager，同一个库
+    second = Agent(persona=load_persona(), llm=FakeLLM(), memory=MemoryManager(store))
+    assert [m["content"] for m in second._history] == [
+        "我叫用户",
+        "用户，助手一直都在哦。",
+    ]
+
+
+def test_restore_history_can_be_disabled(store):
+    warm = Agent(persona=load_persona(), llm=FakeLLM(), memory=MemoryManager(store))
+    "".join(warm.reply("先写一条"))
+    fresh = Agent(
+        persona=load_persona(),
+        llm=FakeLLM(),
+        memory=MemoryManager(store),
+        restore_history=False,
+    )
+    assert fresh._history == []
+
+
+def test_reset_rotates_session_but_keeps_db(store):
+    mgr = MemoryManager(store)
+    agent = Agent(persona=load_persona(), llm=FakeLLM(), memory=mgr)
+    "".join(agent.reply("你好"))
+    old_session = mgr.session_id
+
+    agent.reset()
+
+    assert agent._history == []
+    assert mgr.session_id != old_session
+    assert len(store.recent_messages(limit=10)) == 2  # 绝不删库
+
+
+def test_user_message_survives_llm_failure(store):
+    agent = Agent(persona=load_persona(), llm=BoomLLM(), memory=MemoryManager(store))
+    with pytest.raises(RuntimeError):
+        "".join(agent.reply("这句话不能丢"))
+    rows = store.recent_messages(limit=10)
+    assert [r["role"] for r in rows] == ["user"]
+    assert rows[0]["content"] == "这句话不能丢"
+
+
+class BrokenManager(MemoryManager):
+    """模拟磁盘写满：记忆层每次写入都炸。"""
+
+    def add_turn(self, role, content):
+        raise RuntimeError("disk full")
+
+
+def test_memory_failure_degrades_without_breaking_chat(store):
+    agent = Agent(
+        persona=load_persona(), llm=FakeLLM(), memory=BrokenManager(store)
+    )
+    out = "".join(agent.reply("你好"))
+    assert out == "用户，助手一直都在哦。"  # 对话不受影响
+    assert agent.memory_degraded is True
+
+
+def test_agent_without_memory_writes_nothing(store):
+    agent = Agent(persona=load_persona(), llm=FakeLLM())  # memory=None
+    "".join(agent.reply("你好"))
+    assert store.recent_messages(limit=10) == []
 
 
 def test_deepseek_client_constructable():

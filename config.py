@@ -21,6 +21,13 @@ class ConfigError(Exception):
     """配置缺失或非法时抛出，由 UI 显示为明确错误。"""
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
 @dataclass
 class Settings:
     api_key: str
@@ -30,6 +37,8 @@ class Settings:
     max_tokens: int
     timeout: int
     history_limit: int  # 短期记忆保留的"轮数"上限（每轮 = 1 用户 + 1 助手）
+    memory_enabled: bool  # 关闭后 Agent 退回纯内存模式（Phase 1 行为）
+    memory_db_path: str  # 长期记忆 SQLite 位置（data/ 已在 .gitignore）
 
 
 def load_settings() -> Settings:
@@ -47,4 +56,6 @@ def load_settings() -> Settings:
         max_tokens=int(os.getenv("MAX_TOKENS", "1024")),
         timeout=int(os.getenv("TIMEOUT", "30")),
         history_limit=int(os.getenv("HISTORY_LIMIT", "20")),
+        memory_enabled=_env_bool("MEMORY_ENABLED", True),
+        memory_db_path=(os.getenv("MEMORY_DB_PATH") or "data/assistant.db").strip(),
     )
