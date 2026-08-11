@@ -49,6 +49,7 @@
 | **2.3 手动记忆 + 候选闸门** | `remember` / `forget` / `blacklist` / `propose` / `confirm_candidate` / `reject_candidate`；候选需人工确认才进正表 | `8cb4b40` |
 | **2.4 记忆读取闭环** | `embedder.py`（可替换 Embedder：bge-small-zh-v1.5 / 纯 stdlib 哈希回退，blake2b 稳定哈希）；`retrieval.py`（五通道混合打分 vector0.40/keyword0.20/recency0.15/importance0.15/confidence0.10，向量缺失自动重归一化降级）；`MemoryManager.retrieve/memory_block/reindex`；Prompt 定界注入；Agent 用真实检索替换原 `time.sleep` 模拟序列 | `10981cc` |
 | **2.6 记忆档案面板** | `MemoryPanel` 真实数据化：三栏分区（长期记忆/近期事件/重要目标）+ 候选确认队列（记住/不用记）+ 每轮检索高亮；清债 #1/#2/#3 | `10981cc` |
+| **Step A Memory Gate（抽取器 seam）** | `core/memory/extractor.py`：`MemoryExtractor` + `ExtractedMemory`，自动抽取只经 `propose` 进 `memory_candidate` 闸门、绝不直写正表（源码守卫）；`tests/test_memory_gate.py` 隔离测试（临时信息不进长期记忆 / 稳定偏好进候选 / reject 不污染检索 / 源码守卫 / confirm 转正可检索） | `99da80f` |
 
 ### Knowledge RAG 三柱隔离（架构新增，尚未提交）
 
@@ -77,7 +78,7 @@
 
 | # | 项目 | 性质 | 当前状态 |
 |---|------|------|---------|
-| 3.1 | **Step 2.7 LLM 自动抽取** | 核心缺口 | 未做 |
+| 3.1 | **Step 2.7 LLM 自动抽取** | 核心缺口 | **部分**：抽取器 seam（MemoryExtractor）+ 闸门隔离测试已落地；LLM 分类器与 Agent 接线仍待做（默认关） |
 | 3.2 | **Emotion 支柱** | 补 `#11` seam | 仅留 `emotion_block=None` 占位 |
 | 3.3 | **记忆冲突消解**（Test3：旧 Python / 新 Rust） | 已知缺口 | 新旧记忆共存，旧 confidence 不自动下调 |
 | 3.4 | **sqlite-vec 实装** | 性能/架构 | 暴力余弦，替换点是单方法 |
@@ -188,4 +189,4 @@
 
 ---
 
-_最后更新：2026-08-11 · Phase 3 Persona Engine 已落地（core/persona 包 + 新注入顺序 + Relationship 独立存储），全量 120 测试通过。_
+_最后更新：2026-08-11 · Step A Memory Gate 已落地（MemoryExtractor 抽取器 seam 只经候选闸门写记忆，绝不直写正表；7 项隔离测试通过，全量 127 测试通过）。Phase 3 Persona Engine 已落地（core/persona 包 + 新注入顺序 + Relationship 独立存储）。_

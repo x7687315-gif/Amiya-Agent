@@ -144,6 +144,7 @@ LLM 自动直写 memory 正表        →  ❌ 不存在（这正是主线不需
 | 不自动直写 memory | ✅ 满足 | 无代码把 LLM 输出写进 `memory` |
 | 引入 candidate→confirm→long term 闸门 | ✅ 满足 | `memory_candidate` 表 + `propose/confirm_candidate/reject_candidate` + UI 确认/否决 |
 | 闸门闭环（有出口） | ✅ 满足 | `confirm_candidate` 把 pending→memory 并补向量；rejected 不再打扰 |
+| 抽取器 seam 只写候选闸门 | ✅ 满足（Step A） | `MemoryExtractor` 仅调用 `propose`；`tests/test_memory_gate.py` 守卫其源码无 `remember`/`upsert_memory` 直写调用 |
 | 候选可追溯来源 | ✅ 部分 | `source_msg_id` 字段已建，但目前仅手动/工具填，抽取器接入后才全量 |
 | 画像无闸门直写 | ✅ N/A | 主线 `user_profile` 仅工具/手动写，无 LLM 自动总结 |
 
@@ -151,8 +152,11 @@ LLM 自动直写 memory 正表        →  ❌ 不存在（这正是主线不需
 
 ## 6. 尚未接通的（不是 bug，是路线未到）
 
-- **Step 2.7 LLM 抽取器**：`propose()` 已就绪，但**还没有任何代码调用它**去把对话自动变成候选。
-  闸门空转，等抽取器接上。接入时务必 `EXTRACT_AUTO=0` 默认关闭，只走「🧹 整理记忆」手动按钮 → 候选 → 用户确认。
+- **Step 2.7 LLM 抽取器**：闸门 `propose()` 早就绪；**Step A 已把 `core/memory/extractor.py` 的
+  `MemoryExtractor` 作为「抽取器 seam」接上闸门**——它**只**能经 `propose` 写 `memory_candidate`，
+  源码级守卫（`tests/test_memory_gate.py`）确保它绝不直写 `memory` 正表。
+  **仍待做**：把对话变成候选的 LLM 分类逻辑（调 DeepSeek、解析 JSON、产出 `ExtractedMemory`）
+  + Agent 接线，且务必 `EXTRACT_AUTO=0` 默认关闭，只走「🧹 整理记忆」手动按钮 → 候选 → 用户确认。
 - **Emotion 支柱**：`PromptBuilder` 有 `emotion_block` 参数但永远传 `None`，`persona_state.emotion` 恒为 `'calm'`，
   无情绪模块。这是预留 seam，符合「暂不实现 Emotion」。
 - **衰减 / 遗忘策略**：`decay_rate`、`last_confirmed_at` 字段已落库但逻辑未启用；`forget()` 是显式遗忘，无时间衰减。
