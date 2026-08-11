@@ -30,7 +30,7 @@
 
 三条原则：
 1. **物理隔离** —— Knowledge 只读 markdown，绝不读写 `memory` 表；Memory 只查自己的表。
-2. **各自定界** —— Prompt 中三块用独立定界符包裹，顺序固定（身份 → 知识 → 记忆 → 情绪 → 静态人格 → 护盾）。
+2. **各自定界** —— Prompt 中三块用独立定界符包裹，顺序固定（身份 → 核心价值观 → 知识 → 记忆 → 关系 → 情绪(seam) → 行为 → 语言 → 护盾）。
 3. **防注入** —— 任意检索结果（记忆/知识）注入提示词时**只给内容、不给 score**，避免提示词注入。
 
 ---
@@ -58,6 +58,16 @@
 - `Agent` 新增 `knowledge` 参数，每轮用用户原话检索知识并作为独立块注入（与记忆并列、不混）。
 - `config.py` + `.env.example` 增加 `KNOWLEDGE_DIR` / `KNOWLEDGE_TOP_K`；`ui/app.py` 按配置构建并传入（失败不致命）。
 - **测试**：全量 **105 passed**（含 11 项 knowledge 单测）。
+
+### Phase 3 — Persona Engine（人格引擎）
+
+- `core/persona/` 包化：旧 `core/persona.py` 迁入 `persona.py`，新增 `loader.py` / `behavior_rules.py` / `relationship.py` / `persona_manager.py`；兼容旧 import `from core.persona import Persona / load_persona / PersonaManager`。
+- `worldview` → 改名为 `perspective`（认知视角）；`relationship_to_doctor` / `behavior_guidelines` 移出 `identity.yaml`，分别落到 `relationship.yaml` / `behavior.yaml`。
+- `RelationshipManager`：trust/stage 系统状态管理，读写 `persona_state` 表（与 `memory` 分表，**不污染用户记忆**）；stage v1 四档 **初识 / 熟悉 / 信任 / 深度陪伴**（不使用「家人」）；`block()` 注入【与用户的关系】，仅背景事实、**绝不控语气**。
+- `PromptBuilder.build_system` 重写新注入顺序（人格先于上下文，减少漂移）：`身份 → 视角与价值观 → 知识 → 记忆 → 关系 → 情绪(seam) → 行为 → 语言 → 护盾`。
+- `Agent` 构造 `PersonaManager`，每轮注入 `relationship_block` / `behavior_block`；`MemoryManager` 新增 `save_state` 透传。
+- Emotion / Voice 本轮仅保留 seam，不实现完整逻辑。
+- **测试**：全量 **120 passed**（含 12 项 persona 引擎单测）。
 
 > 说明：原冻结文档中 "2.5 Prompt 注入" 已在 2.4 中一并落地（Agent 真实检索后调用 `build_system(memory_block)`），故 2.5 不再单列。
 
@@ -165,6 +175,7 @@
 | #11 Emotion 仅 seam | 低 | 4.2 |
 | #12 知识检索权重未进 config | 低 | 在线调参时再提 |
 | #13 Memory 五通道混合检索权重（vector/keyword/recency/importance/confidence）未调优，沿用经验默认 | 低 | 真实 bge 验证后调参（4.7）；本阶段**刻意不优化** |
+| #14 Relationship trust 自动涨跌未实现 | 低 | 后续阶段（`stage` 仅静态读取默认 trust=70，set_trust/bump 方法已就位待调用） |
 
 ---
 
@@ -177,4 +188,4 @@
 
 ---
 
-_最后更新：2026-08-11 · 对应代码已落地至 embedder/retrieval/knowledge 三模块 + MemoryManager/Agent/PromptBuilder 接线，全量 105 测试通过。_
+_最后更新：2026-08-11 · Phase 3 Persona Engine 已落地（core/persona 包 + 新注入顺序 + Relationship 独立存储），全量 120 测试通过。_

@@ -1,10 +1,17 @@
-"""人格抽屉组件：从右侧滑出，展示助手的设定。"""
+"""人格抽屉组件：从右侧滑出，展示助手的设定。
+
+Phase 3 起：抽屉从 persona 子系统读取配置——
+- 视角与认知 / 价值观 / 思考方式：identity.yaml（persona.identity）
+- 行为准则：behavior.yaml
+- 与用户的关系：relationship.yaml（默认阶段背景）
+"""
 from __future__ import annotations
 
 from typing import Any, Dict, List
 
 import flet as ft
 
+from core.persona.loader import load_behavior, load_relationship
 from ui.theme import ALIGN_CENTER, c, t, sp, r
 from ui.components.avatar import make_avatar
 from ui.design.avatar_provider import AvatarProvider
@@ -24,11 +31,9 @@ class PersonaDrawer(ft.NavigationDrawer):
         identity = self.persona.identity
         tags = self._extract_tags(identity)
         sections = [
-            ("世界观", "worldview"),
+            ("视角与认知", "perspective"),
             ("价值观", "values"),
             ("思考方式", "thinking_style"),
-            ("与用户的关系", "relationship_to_doctor"),
-            ("行为准则", "behavior_guidelines"),
         ]
 
         controls: List[ft.Control] = [
@@ -88,21 +93,36 @@ class PersonaDrawer(ft.NavigationDrawer):
         for title, key in sections:
             section_text = self._format_list(identity.get(key))
             if section_text:
-                controls.append(
-                    ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Text(title, size=t.TINY, weight=ft.FontWeight.BOLD, color=c.PRIMARY),
-                                ft.Text(section_text, size=t.BODY, color=c.TEXT_PRIMARY),
-                            ],
-                            spacing=sp.SM,
-                        ),
-                        padding=ft.Padding.only(left=sp.XL, right=sp.XL, bottom=sp.LG),
-                    )
-                )
+                controls.append(self._section(title, section_text))
+
+        # 行为准则（来自 behavior.yaml）
+        behavior = load_behavior().get("guidelines", [])
+        if behavior:
+            controls.append(self._section("行为准则", self._format_list(behavior)))
+
+        # 与用户的关系（来自 relationship.yaml 默认阶段背景）
+        rel = load_relationship()
+        rel_stage = rel.get("default_stage", "信任")
+        rel_bg = rel.get("stages", {}).get(rel_stage, {}).get("background", [])
+        if rel_bg:
+            controls.append(
+                self._section(f"与用户的关系（{rel_stage}）", self._format_list(rel_bg))
+            )
 
         controls.append(ft.Container(height=sp.XL))
         return controls
+
+    def _section(self, title: str, text: str) -> ft.Container:
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(title, size=t.TINY, weight=ft.FontWeight.BOLD, color=c.PRIMARY),
+                    ft.Text(text, size=t.BODY, color=c.TEXT_PRIMARY),
+                ],
+                spacing=sp.SM,
+            ),
+            padding=ft.Padding.only(left=sp.XL, right=sp.XL, bottom=sp.LG),
+        )
 
     def _tag(self, label: str) -> ft.Container:
         return ft.Container(
@@ -113,9 +133,9 @@ class PersonaDrawer(ft.NavigationDrawer):
         )
 
     def _extract_tags(self, identity: Dict[str, Any]) -> List[str]:
-        """从 behavior_guidelines / values 中提取行为标签。"""
+        """从 behavior.yaml 行为准则 + identity 价值观中提取行为标签。"""
         tags: List[str] = []
-        guidelines = identity.get("behavior_guidelines", [])
+        guidelines = load_behavior().get("guidelines", [])
         values = identity.get("values", [])
         keywords = {
             "温柔": "温柔",

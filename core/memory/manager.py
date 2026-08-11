@@ -331,6 +331,13 @@ class MemoryManager:
         """累加今日陪伴秒数（跨天由 store 归零），返回累加后的值。"""
         return self._store.bump_companionship(seconds)
 
+    def save_state(self, **fields) -> None:
+        """写回 persona_state（trust/stage 等系统状态）。由 RelationshipManager 调用。
+
+        仅透传 store.save_state，字段受 _STATE_FIELDS 白名单约束——Agent 层不直接碰 store。
+        """
+        self._store.save_state(**fields)
+
     # ----- 生命周期 -----
     def close(self) -> None:
         self._store.close()

@@ -19,7 +19,7 @@ import logging
 from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional
 
 from .llm_client import LLMClient
-from .persona import Persona
+from .persona import Persona, PersonaManager
 from .prompt_builder import PromptBuilder
 
 if TYPE_CHECKING:  # 仅类型标注，运行期不强制依赖记忆/知识包
@@ -63,6 +63,8 @@ class Agent:
         self.history_limit = history_limit
         self._on_phase = on_phase
         self._memory = memory
+        # Persona 子系统门面：聚合固定身份 + 行为准则 + 动态关系（来自 persona_state）
+        self._persona_manager = PersonaManager(persona, memory=self._memory)
         self._on_retrieval = on_retrieval
         self._memory_top_k = memory_top_k
         self._knowledge = knowledge
@@ -144,10 +146,15 @@ class Agent:
             if khits:
                 knowledge_block = self._knowledge.render_block(khits)
 
-        # 三柱定界拼装：身份 → 角色知识 → 用户记忆 → 当前情绪（暂留 seam）
+        # 人格先于上下文：身份 → 核心价值观 → 知识 → 记忆 → 关系 → 情绪 seam → 行为 → 语言
+        relationship_block = self._persona_manager.relationship_block()
+        behavior_block = self._persona_manager.behavior_block()
         system_prompt = self.prompt_builder.build_system(
-            memory_block,
+            memory_block=memory_block,
             knowledge_block=knowledge_block,
+            relationship_block=relationship_block,
+            behavior_block=behavior_block,
+            emotion_block=None,  # Emotion seam（本轮不接入真实模型）
         )
 
         # on_retrieval 回调：把命中项交给 2.6 的 UI（thinking overlay / 记忆面板）
