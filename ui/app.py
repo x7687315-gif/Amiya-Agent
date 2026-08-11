@@ -25,6 +25,7 @@ from config import ConfigError, load_settings  # noqa: E402
 from core.agent import Agent  # noqa: E402
 from core.llm_client import DeepSeekLLMClient  # noqa: E402
 from core.memory import MemoryManager, SQLiteMemoryStore, get_embedder  # noqa: E402
+from core.knowledge import build_knowledge_manager  # noqa: E402
 from core.persona import load_persona  # noqa: E402
 from ui.components.chat_area import ChatArea  # noqa: E402
 from ui.components.header import Header  # noqa: E402
@@ -87,6 +88,21 @@ class AssistantApp:
                 logger.exception("记忆系统初始化失败，助手将以纯内存模式运行")
                 memory = None
 
+        # 角色知识库（Knowledge RAG）：knowledge/ 目录存在才启用，失败不致命。
+        # 与记忆系统完全独立——知识是"设定"，记忆是"经历"，互不混入。
+        knowledge = None
+        try:
+            knowledge = build_knowledge_manager(
+                settings.knowledge_dir,
+                backend=settings.embedding_backend,
+                model_name=settings.embedding_model,
+                device=settings.embedding_device,
+                top_k=settings.knowledge_top_k,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("知识库初始化失败，助手将以无知识库模式运行")
+            knowledge = None
+
         self.agent = Agent(
             persona=persona,
             llm=DeepSeekLLMClient(
@@ -102,6 +118,8 @@ class AssistantApp:
             memory=memory,
             on_retrieval=self._on_retrieval,
             memory_top_k=settings.memory_top_k,
+            knowledge=knowledge,
+            knowledge_top_k=settings.knowledge_top_k,
         )
 
         self._setup_page(persona)

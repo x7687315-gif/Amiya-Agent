@@ -43,6 +43,8 @@ class Settings:
     embedding_model: str  # 嵌入模型名（默认 bge-small-zh-v1.5，中文场景）
     embedding_device: str  # 推理设备：cpu / cuda
     memory_top_k: int  # 每轮注入提示词的最相关记忆条数
+    knowledge_dir: str  # 角色知识库目录（knowledge/*.md，Knowledge RAG 语料）
+    knowledge_top_k: int  # 每轮注入提示词的最相关知识片段条数
 
 
 def load_settings() -> Settings:
@@ -68,4 +70,6 @@ def load_settings() -> Settings:
         ).strip(),
         embedding_device=(os.getenv("EMBEDDING_DEVICE") or "cpu").strip(),
         memory_top_k=int(os.getenv("MEMORY_TOP_K", "5")),
+        knowledge_dir=(os.getenv("KNOWLEDGE_DIR") or "knowledge").strip(),
+        knowledge_top_k=int(os.getenv("KNOWLEDGE_TOP_K", "4")),
     )

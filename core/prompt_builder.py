@@ -1,7 +1,9 @@
-"""动态 system 提示词拼装：把静态人格 + 语言风格 + few-shot 组装成稳定系统提示词。
+"""动态 system 提示词拼装：把三柱上下文（角色知识 / 用户记忆 / 当前情绪）+ 静态人格 + 语言风格 + few-shot 组装成稳定系统提示词。
 
-Phase 1 只拼「静态人格」（身份 + 世界观 + 价值观 + 关系 + 语言风格 + few-shot）。
-后续 Phase 会把记忆 / 情绪 / Persona Runtime 作为独立段落注入此处，且用定界包裹防注入。
+三柱各自独立、用定界块包裹、互不混入（见 core/knowledge/__init__.py 的隔离约定）：
+- build_system(knowledge_block=...)  → 【角色知识】  Knowledge RAG（knowledge/*.md）
+- build_system(memory_block=...)      → 【相关用户记忆】  Memory（core.memory）
+- build_system(emotion_block=...)     → 【当前情绪】  Emotion（未来支柱，暂留 seam）
 """
 from __future__ import annotations
 
@@ -14,7 +16,13 @@ class PromptBuilder:
     def __init__(self, persona: Persona) -> None:
         self.persona = persona
 
-    def build_system(self, memory_block: Optional[str] = None) -> str:
+    def build_system(
+        self,
+        memory_block: Optional[str] = None,
+        *,
+        knowledge_block: Optional[str] = None,
+        emotion_block: Optional[str] = None,
+    ) -> str:
         p = self.persona
         idn = p.identity
         sp = p.speech
@@ -28,15 +36,26 @@ class PromptBuilder:
             "不要声明自己是 AI、助手或语言模型。"
         )
 
-        # 2（可选）. 长期记忆注入（Step 2.4）：检索到相关记忆才追加
-        # 放在身份之下、其余人格段落之上——记忆是上下文，不盖过身份。
+        # 2（可选）. 角色知识注入（Knowledge RAG）：检索到的设定/世界观/风格片段。
+        # 放在身份之下、用户记忆之上——知识定义"助手是谁"，记忆是"关于用户的过往"，
+        # 二者来源与存储彻底隔离（见 core/knowledge/__init__.py），此处也用独立定界块，不混。
+        if knowledge_block:
+            parts.append(knowledge_block)
+
+        # 3（可选）. 长期记忆注入（Step 2.4）：检索到相关记忆才追加
+        # 放在身份与知识之下、其余人格段落之上——记忆是上下文，不盖过身份。
         if memory_block:
             parts.append(
-                "【相关记忆】\n"
+                "【相关用户记忆】\n"
                 + memory_block
                 + "\n以上是你长期记得的、与用户有关的事。当它们与当前对话相关时自然呼应，"
                 "不要生硬提及；若与用户当下的说法冲突，以用户当下的表达为准。"
             )
+
+        # 4（可选）. 当前情绪注入（未来 Emotion 支柱，暂仅留 seam）：
+        # 调制当下语气，不污染知识与记忆两块内容。当前无情绪模块时传入 None。
+        if emotion_block:
+            parts.append(emotion_block)
 
         # 2. 世界观
         worldview = idn.get("worldview")

@@ -22,7 +22,8 @@ from .llm_client import LLMClient
 from .persona import Persona
 from .prompt_builder import PromptBuilder
 
-if TYPE_CHECKING:  # 仅类型标注，运行期不强制依赖记忆包
+if TYPE_CHECKING:  # 仅类型标注，运行期不强制依赖记忆/知识包
+    from .knowledge.manager import KnowledgeManager
     from .memory.manager import MemoryManager, RetrievalHit
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ class Agent:
         restore_history: bool = True,
         on_retrieval: "Optional[Callable[[List[RetrievalHit]], None]]" = None,
         memory_top_k: int = 5,
+        knowledge: "Optional[KnowledgeManager]" = None,
+        knowledge_top_k: int = 4,
     ) -> None:
         """
         memory: 记忆中间层。为 None 时行为与 Phase 1 完全一致（纯内存、不落盘），
@@ -49,6 +52,9 @@ class Agent:
         restore_history: 冷启动时是否从库里回填短期窗口（"记得住"的最小体现）。
         on_retrieval: 检索命中回调（Step 2.6 的 UI 钩子），把命中项交给记忆面板等。
         memory_top_k: 每轮检索返回并注入提示词的最相关记忆条数。
+        knowledge: 角色知识库（Knowledge RAG）。为 None 时不做知识检索，
+                   与 memory 完全独立——知识是"设定"，记忆是"经历"，互不混入。
+        knowledge_top_k: 每轮注入提示词的最相关知识片段条数。
         """
         self.persona = persona
         self.llm = llm
@@ -59,6 +65,8 @@ class Agent:
         self._memory = memory
         self._on_retrieval = on_retrieval
         self._memory_top_k = memory_top_k
+        self._knowledge = knowledge
+        self._knowledge_top_k = knowledge_top_k
         self._history: List[Dict[str, str]] = []  # 短期窗口（喂给 LLM 的上下文）
         self.memory_degraded = False  # 记忆写入是否发生过失败（UI 可据此提示）
         if memory is not None and restore_history:
@@ -123,7 +131,24 @@ class Agent:
         # 把检索到的记忆注入系统提示词（定界包裹防注入，不含分数）
         # 经 MemoryManager.format_block 渲染——编排层不直接依赖 retrieval 子层
         memory_block = self._memory.format_block(hits) if self._memory is not None else ""
-        system_prompt = self.prompt_builder.build_system(memory_block)
+
+        # 角色知识检索（Knowledge RAG）：与记忆并列、独立定界、互不混入。
+        # 失败只降级——大不了这一轮不引用设定，绝不让对话崩掉。
+        knowledge_block = ""
+        if self._knowledge is not None:
+            try:
+                khits = self._knowledge.retrieve(user_text, top_k=self._knowledge_top_k)
+            except Exception as e:  # noqa: BLE001
+                log.warning("知识检索失败：%s", e)
+                khits = []
+            if khits:
+                knowledge_block = self._knowledge.render_block(khits)
+
+        # 三柱定界拼装：身份 → 角色知识 → 用户记忆 → 当前情绪（暂留 seam）
+        system_prompt = self.prompt_builder.build_system(
+            memory_block,
+            knowledge_block=knowledge_block,
+        )
 
         # on_retrieval 回调：把命中项交给 2.6 的 UI（thinking overlay / 记忆面板）
         if self._on_retrieval is not None and hits:

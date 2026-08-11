@@ -4,7 +4,7 @@
   1. 写入 Memory   —— MemoryManager.remember / propose + confirm
   2. 检索 Memory   —— MemoryManager.retrieve 并打印五通道分项
   3. Agent 读取    —— 构造 Agent 并对话，捕获它检索到的命中
-  4. Prompt 注入   —— 捕获 Agent 实际发给 LLM 的 system 提示词，确认含【相关记忆】
+  4. Prompt 注入   —— 捕获 Agent 实际发给 LLM 的 system 提示词，确认含【相关用户记忆】
 
 用法（项目根目录）：
     python tools/memory_inspector.py                      # 用临时库，不污染真实数据
@@ -113,7 +113,7 @@ def main() -> int:
     # ---------- 4) Prompt 注入效果 ----------
     _section("4) Prompt 注入效果（Agent 实际发给 LLM 的 system 提示词）")
     sys_prompt = llm.last_system
-    idx = sys_prompt.find("【相关记忆】")
+    idx = sys_prompt.find("【相关用户记忆】")
     if idx == -1:
         print("  （本轮未注入记忆——检索可能为空，或记忆与问题不相关）")
     else:
@@ -122,7 +122,7 @@ def main() -> int:
         print(block)
 
     _section("自检完成")
-    print("  若 1~4 均有输出且 4 出现了【相关记忆】段落，说明记忆读取闭环已打通。")
+    print("  若 1~4 均有输出且 4 出现了【相关用户记忆】段落，说明记忆读取闭环已打通。")
     store.close()
     return 0
 
