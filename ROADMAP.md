@@ -84,7 +84,7 @@
 | 3.4 | **sqlite-vec 实装** | 性能/架构 | 暴力余弦，替换点是单方法 |
 | 3.5 | **UI 打磨** | 体验 | 滑块/增量高亮（债 #6/#7） |
 | 3.6 | **提交 Knowledge 三柱隔离** | 工程 | 改动未 commit |
-| 3.7 | **真实 bge 语义召回验证** | 验证 | 沙箱无网，需你本机联网跑 |
+| 3.7 | **真实 bge 语义召回验证** | 验证 | **离线基线已跑通**：沙箱无网→哈希回退，检索管线 + Gate 集成验证 6/6 PASS；真实 bge 语义召回待你本机联网跑（见 4.7） |
 
 ---
 
@@ -154,9 +154,12 @@
 ### 4.7 真实 bge 语义召回验证
 
 - 你本机联网执行 `python tools/manual_memory_test.py --backend auto`
+- harness 现已增强（`0aaf2ff` 之后）：
+  - **离线快速回退**：2s 探测 HuggingFace 可达性，离线直接走哈希（不再卡 30s 重试/崩溃）；在线才允许 auto 下载真实 bge。
+  - **新增「B. Memory Gate 集成」节**：经真实 `MemoryManager.retrieve → MemoryRetriever` 五通道打分链路验证 Step A 隔离保证（候选确认前绝不进检索 / confirm 后召回 / reject 永不污染），离线可跑。
 - 重点验证：
   1. 语义改写召回（"开发习惯" ↔ "规划架构再写代码"）是否生效
-  2. Test2 无关项（"今天晚上吃什么"）是否被排除误召回
+  2. Test2 无关项（"今天晚上吃什么"）是否被排除误召回 — 注意：当前五通道含 recency/importance/confidence（与查询无关），记忆极少时无相关性门槛会仍返回全部，真实 bge 只强化 vector 通道；如需「无关严格不召回」见债 #15
   3. Test3 冲突场景的 confidence 行为（依赖 4.3 是否先实现）
 
 ---
@@ -177,6 +180,7 @@
 | #12 知识检索权重未进 config | 低 | 在线调参时再提 |
 | #13 Memory 五通道混合检索权重（vector/keyword/recency/importance/confidence）未调优，沿用经验默认 | 低 | 真实 bge 验证后调参（4.7）；本阶段**刻意不优化** |
 | #14 Relationship trust 自动涨跌未实现 | 低 | 后续阶段（`stage` 仅静态读取默认 trust=70，set_trust/bump 方法已就位待调用） |
+| #15 检索相关性门槛缺失（记忆极少时无关查询仍召回；recency/importance/confidence 与查询无关，形成打分地板） | 低 | 后续「检索相关性门槛」增强（要求 vector/keyword 至少一项有贡献） |
 
 ---
 
@@ -189,4 +193,4 @@
 
 ---
 
-_最后更新：2026-08-11 · Step A Memory Gate 已落地（MemoryExtractor 抽取器 seam 只经候选闸门写记忆，绝不直写正表；7 项隔离测试通过，全量 127 测试通过）。Phase 3 Persona Engine 已落地（core/persona 包 + 新注入顺序 + Relationship 独立存储）。_
+_最后更新：2026-08-11 · Step A Memory Gate 已落地（MemoryExtractor 抽取器 seam 只经候选闸门写记忆，绝不直写正表；7 项隔离测试通过，全量 127 测试通过）+ 验证 harness 增强（离线快速回退 + Gate 集成节 6/6 PASS，真实 bge 语义召回待你本机联网验证）。Phase 3 Persona Engine 已落地（core/persona 包 + 新注入顺序 + Relationship 独立存储）。_
