@@ -116,6 +116,14 @@ class MemoryManager:
         """
         return self._store.recent_messages(limit=limit)
 
+    def messages_since(self, msg_id: int, limit: int = 200) -> List[Dict[str, object]]:
+        """取 id > msg_id 的对话（时间正序），供抽取书签增量处理。
+
+        返回字典含 id / role / content——id 用于推进 last_extract_msg_id，
+        避免下一轮重复处理同一批消息。Agent 层只认本方法，不直接碰 store。
+        """
+        return self._store.messages_since(msg_id, limit=limit)
+
     # ----- 手动记忆（Step 2.3；无任何 LLM 参与） -----
     def _check_type(self, type: str) -> None:
         if type not in MEMORY_TYPES:

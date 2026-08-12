@@ -24,7 +24,13 @@ import flet as ft  # noqa: E402
 from config import ConfigError, load_settings  # noqa: E402
 from core.agent import Agent  # noqa: E402
 from core.llm_client import DeepSeekLLMClient  # noqa: E402
-from core.memory import MemoryManager, SQLiteMemoryStore, get_embedder  # noqa: E402
+from core.memory import (  # noqa: E402
+    ExtractionEngine,
+    MemoryExtractor,
+    MemoryManager,
+    SQLiteMemoryStore,
+    get_embedder,
+)
 from core.knowledge import build_knowledge_manager  # noqa: E402
 from core.persona import load_persona  # noqa: E402
 from ui.components.chat_area import ChatArea  # noqa: E402
@@ -103,16 +109,28 @@ class AssistantApp:
             logger.exception("知识库初始化失败，助手将以无知识库模式运行")
             knowledge = None
 
+        # LLM 客户端：Agent 回复与记忆抽取共用同一实例（抽取走独立提示词）。
+        llm = DeepSeekLLMClient(
+            api_key=settings.api_key,
+            base_url=settings.base_url,
+            model=settings.model,
+            temperature=settings.temperature,
+            max_tokens=settings.max_tokens,
+            timeout=settings.timeout,
+        )
+        # 记忆抽取引擎（Step 2.7 M2.1）：保持依赖注入——在此 Composition Root 构造，
+        # 业务层（Agent）不创建它。EXTRACT_AUTO 默认 False，钩子 dormant，零副作用。
+        extractor = None
+        if memory is not None:
+            try:
+                extractor = ExtractionEngine(MemoryExtractor(memory), llm)
+            except Exception:  # noqa: BLE001
+                logger.exception("抽取引擎初始化失败，自动记忆整理将不可用")
+                extractor = None
+
         self.agent = Agent(
             persona=persona,
-            llm=DeepSeekLLMClient(
-                api_key=settings.api_key,
-                base_url=settings.base_url,
-                model=settings.model,
-                temperature=settings.temperature,
-                max_tokens=settings.max_tokens,
-                timeout=settings.timeout,
-            ),
+            llm=llm,
             history_limit=settings.history_limit,
             on_phase=self._on_phase,
             memory=memory,
@@ -120,6 +138,10 @@ class AssistantApp:
             memory_top_k=settings.memory_top_k,
             knowledge=knowledge,
             knowledge_top_k=settings.knowledge_top_k,
+            extractor=extractor,
+            extract_auto=settings.extract_auto,
+            default_extract_window=settings.default_extract_window,
+            manual_extract_window=settings.manual_extract_window,
         )
 
         self._setup_page(persona)

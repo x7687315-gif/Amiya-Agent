@@ -45,6 +45,9 @@ class Settings:
     memory_top_k: int  # 每轮注入提示词的最相关记忆条数
     knowledge_dir: str  # 角色知识库目录（knowledge/*.md，Knowledge RAG 语料）
     knowledge_top_k: int  # 每轮注入提示词的最相关知识片段条数
+    extract_auto: bool  # 是否自动抽取候选记忆（默认 False；手动整理优先）
+    default_extract_window: int  # 自动抽取窗口（轮数）；10 轮上下文足够避免碎片化
+    manual_extract_window: int  # 手动「整理记忆」窗口（轮数）；更长以覆盖搁置的话题
 
 
 def load_settings() -> Settings:
@@ -72,4 +75,7 @@ def load_settings() -> Settings:
         memory_top_k=int(os.getenv("MEMORY_TOP_K", "5")),
         knowledge_dir=(os.getenv("KNOWLEDGE_DIR") or "knowledge").strip(),
         knowledge_top_k=int(os.getenv("KNOWLEDGE_TOP_K", "4")),
+        extract_auto=_env_bool("EXTRACT_AUTO", False),
+        default_extract_window=int(os.getenv("DEFAULT_EXTRACT_WINDOW", "10")),
+        manual_extract_window=int(os.getenv("MANUAL_EXTRACT_WINDOW", "20")),
     )

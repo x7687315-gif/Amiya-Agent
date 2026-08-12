@@ -11,7 +11,9 @@ Responsibility：人格加载 → 提示词拼装 → 调 LLM 流式 → 维护�
 驱动——UI 无需改动。
 
 Prompt 记忆注入（Step 2.5）：检索命中经 PromptBuilder 定界注入系统提示词，
-让助手「想得起」长期记忆。LLM 自动抽取（2.7）仍不在本步。
+让助手「想得起」长期记忆。LLM 自动抽取（Step 2.7 M2.1）已**接线**但默认关闭
+（EXTRACT_AUTO=False）——只在 reply() 末尾挂一个受守卫的钩子，绝不自动触发，
+须由人或「🧹 整理记忆」显式发起；抽取只写 memory_candidate 闸门，不直写正表。
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ from .prompt_builder import PromptBuilder
 
 if TYPE_CHECKING:  # 仅类型标注，运行期不强制依赖记忆/知识包
     from .knowledge.manager import KnowledgeManager
+    from .memory.extraction_engine import ExtractionEngine
     from .memory.manager import MemoryManager, RetrievalHit
 
 log = logging.getLogger(__name__)
@@ -45,6 +48,11 @@ class Agent:
         memory_top_k: int = 5,
         knowledge: "Optional[KnowledgeManager]" = None,
         knowledge_top_k: int = 4,
+        *,
+        extractor: "Optional[ExtractionEngine]" = None,
+        extract_auto: bool = False,
+        default_extract_window: int = 10,
+        manual_extract_window: int = 20,
     ) -> None:
         """
         memory: 记忆中间层。为 None 时行为与 Phase 1 完全一致（纯内存、不落盘），
@@ -55,6 +63,11 @@ class Agent:
         knowledge: 角色知识库（Knowledge RAG）。为 None 时不做知识检索，
                    与 memory 完全独立——知识是"设定"，记忆是"经历"，互不混入。
         knowledge_top_k: 每轮注入提示词的最相关知识片段条数。
+        extractor: 记忆抽取引擎（可选）。为 None 时 Agent 行为与 M1 完全一致，
+                   现有调用方无需改动；由 Composition Root 注入，业务层不创建它。
+        extract_auto: 是否每轮自动抽取候选。默认 False——钩子存在但 dormant，
+                     零 LLM 调用、零候选写入；手动整理不受影响。
+        default_extract_window / manual_extract_window: 自动 / 手动抽取的上下文轮数。
         """
         self.persona = persona
         self.llm = llm
@@ -69,6 +82,11 @@ class Agent:
         self._memory_top_k = memory_top_k
         self._knowledge = knowledge
         self._knowledge_top_k = knowledge_top_k
+        # 记忆抽取（Step 2.7 M2.1）：可选依赖，默认不触发
+        self._extractor = extractor
+        self._extract_auto = extract_auto
+        self._default_extract_window = default_extract_window
+        self._manual_extract_window = manual_extract_window
         self._history: List[Dict[str, str]] = []  # 短期窗口（喂给 LLM 的上下文）
         self.memory_degraded = False  # 记忆写入是否发生过失败（UI 可据此提示）
         if memory is not None and restore_history:
@@ -109,6 +127,59 @@ class Agent:
         limit = self.history_limit * 2
         if len(self._history) > limit:
             self._history = self._history[-limit:]
+
+    # ----- 记忆抽取（Step 2.7 M2.1） -----
+    def _maybe_extract(self) -> None:
+        """自动抽取钩子：仅在 EXTRACT_AUTO=True 且注入了 extractor 时触发。
+
+        守卫位于 llm.chat 调用之前——False 时直接返回，零 LLM 调用、零候选写入，
+        对现有行为零影响。
+        """
+        if not self._extract_auto or self._extractor is None:
+            return
+        self._run_extraction(self._default_extract_window)
+
+    def extract_now(self, *, window_turns: "Optional[int]" = None) -> List[int]:
+        """手动整理：立即把「自上次书签以来的新对话」抽成候选送进闸门。
+
+        不受 EXTRACT_AUTO 约束（仅受 extractor 是否为 None 约束）——落实「手动整理优先」。
+        供未来 UI「🧹 整理记忆」按钮调用。返回新入队的候选 id 列表（无引擎时 []）。
+        """
+        if self._extractor is None:
+            return []
+        return self._run_extraction(window_turns or self._manual_extract_window)
+
+    def _run_extraction(self, window_turns: int) -> List[int]:
+        """抽取核心（自动/手动共用）：取书签后新消息 → extract → 推进书签。
+
+        任何异常都静默降级为返回 []，绝不崩对话。书签无论是否产出候选都会推进，
+        避免下一轮重复处理同一批消息（last_extract_msg_id 存于 persona_state）。
+        """
+        if self._memory is None or self._extractor is None:
+            return []
+        try:
+            bookmark = int(self._memory.state().get("last_extract_msg_id") or 0)
+            turns = self._memory.messages_since(bookmark, limit=window_turns * 2)
+        except Exception as e:  # noqa: BLE001
+            log.warning("读取抽取窗口失败（已忽略）：%s", e)
+            return []
+        if not turns:
+            return []
+        # 只把中性 role/content 喂给抽取引擎，绝不混入助手 system prompt（三柱隔离）
+        window = [{"role": t["role"], "content": t["content"]} for t in turns]
+        try:
+            ids = self._extractor.extract(window)
+        except Exception:  # noqa: BLE001 - 抽取失败绝不崩对话
+            log.warning("记忆自动抽取失败（已忽略）")
+            ids = []
+        # 推进书签到本批最新消息 id（与是否产出候选无关，保证幂等）
+        try:
+            self._memory.save_state(
+                last_extract_msg_id=max(int(t["id"]) for t in turns)
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("抽取书签更新失败（已忽略）：%s", e)
+        return ids
 
     # ----- 主循环 -----
     def reply(self, user_text: str) -> Iterator[str]:
@@ -173,6 +244,8 @@ class Agent:
             self._remember("assistant", full)
             # 限制短期记忆总量，避免长会话无限增长（窗口之外不再保留）
             self._trim_history()
+            # 记忆抽取钩子：EXTRACT_AUTO=False 时直接返回（零副作用），True 时才触发
+            self._maybe_extract()
 
     def reset(self) -> None:
         """开启新会话：清空短期窗口并轮换 session_id，**绝不删库**。"""

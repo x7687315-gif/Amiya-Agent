@@ -148,7 +148,7 @@ class MemoryStore(Protocol):
 
     def add_message(self, role: str, content: str, session_id: str) -> int: ...
     def recent_messages(self, limit: int = 40) -> List[Dict[str, str]]: ...
-    def messages_since(self, msg_id: int, limit: int = 200) -> List[Dict[str, str]]: ...
+    def messages_since(self, msg_id: int, limit: int = 200) -> List[Dict[str, object]]: ...
     def upsert_memory(
         self,
         type: str,
@@ -277,14 +277,17 @@ class SQLiteMemoryStore:
             {"role": r["role"], "content": r["content"]} for r in reversed(rows)
         ]
 
-    def messages_since(self, msg_id: int, limit: int = 200) -> List[Dict[str, str]]:
+    def messages_since(self, msg_id: int, limit: int = 200) -> List[Dict[str, object]]:
+        # 回传 id：供抽取书签（last_extract_msg_id）推进——调用方据此得知"已处理到哪条"。
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content FROM conversation WHERE id > ? "
+                "SELECT id, role, content FROM conversation WHERE id > ? "
                 "ORDER BY id ASC LIMIT ?",
                 (msg_id, limit),
             ).fetchall()
-        return [{"role": r["role"], "content": r["content"]} for r in rows]
+        return [
+            {"id": r["id"], "role": r["role"], "content": r["content"]} for r in rows
+        ]
 
     # ----- 记忆 -----
     def upsert_memory(

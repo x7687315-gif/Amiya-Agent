@@ -78,7 +78,7 @@
 
 | # | 项目 | 性质 | 当前状态 |
 |---|------|------|---------|
-| 3.1 | **Step 2.7 LLM 自动抽取** | 进行中 | **M1 已落地**：ExtractionEngine + parse_json_array + FakeLLM + 候选流程（134 测试通过）；真实 DeepSeek `chat()` / `Settings.extract_auto` / Agent 接线 / UI 闸门仍待做（默认关） |
+| 3.1 | **Step 2.7 LLM 自动抽取** | 进行中 | **M1 + M2.1 已落地**：ExtractionEngine + parse_json_array + FakeLLM（M1，134 测试）；M2.1 完成 Agent 接线（`extractor` 可选依赖注入、EXTRACT_AUTO 默认关、默认/手动窗口 10/20 轮）+ `last_extract_msg_id` 书签幂等（全量 143 测试通过）。真实 DeepSeek `chat()`（M4）/ UI 闸门面板（M3）仍待做 |
 | 3.2 | **Emotion 支柱** | 补 `#11` seam | 仅留 `emotion_block=None` 占位 |
 | 3.3 | **记忆冲突消解**（Test3：旧 Python / 新 Rust） | 已知缺口 | 新旧记忆共存，旧 confidence 不自动下调 |
 | 3.4 | **sqlite-vec 实装** | 性能/架构 | 暴力余弦，替换点是单方法 |
@@ -188,9 +188,9 @@
 
 1. **冲突消解**选方案 A（规则轻量）还是 B（LLM 主导）？→ 建议先 A。
 2. **Emotion** 是否要做长期持久化，还是仅本轮短期？
-3. **auto_extract** 默认开还是关？（建议默认关，避免未确认记忆污染）
+3. **auto_extract 默认关已落地（M2.1）**：Agent 接线但 dormant（守卫在 `llm.chat` 之前），手动整理优先；真实自动触发待 M4 验证后考虑默认开。
 4. 是否现在就**提交 Knowledge 三柱隔离**改动？→ 已于 Phase 2.7 基线提交（与记忆检索接入合并为一笔）。
 
 ---
 
-_最后更新：2026-08-12 · Step 2.7 M1 已落地（ExtractionEngine + parse_json_array + FakeLLM + 候选流程，新增 7 测试，全量 134 通过；真实 DeepSeek chat / 配置开关 / Agent 接线 / UI 闸门待做，默认关）。Step A Memory Gate 已落地。Phase 3 Persona Engine 已落地。_
+_最后更新：2026-08-12 · Step 2.7 M1 + M2.1 已落地（ExtractionEngine + Agent 接线 + last_extract_msg_id 书签幂等，全量 143 测试通过；EXTRACT_AUTO 默认关，手动整理优先）。Step A Memory Gate 已落地。Phase 3 Persona Engine 已落地。_
