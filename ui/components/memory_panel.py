@@ -445,7 +445,9 @@ class MemoryPanel(ft.Container):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        self.page.show_dialog(dialog)
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
 
     # ----- 用户操作：已确认记忆（M3.3，人拥有最终控制权） -----
     def _forget(self, mem_id: int) -> None:
@@ -500,7 +502,9 @@ class MemoryPanel(ft.Container):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        self.page.show_dialog(dialog)
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
 
     # ----- 整理候选（可选，仅 extractor 可用时显示） -----
     def _on_extract_click(self, _e: ft.ControlEvent) -> None:
@@ -531,7 +535,10 @@ class MemoryPanel(ft.Container):
                 else:
                     msg = "整理失败，请稍后再试"
                 try:
-                    self.page.show_dialog(ft.SnackBar(content=ft.Text(msg)))
+                    snack = ft.SnackBar(content=ft.Text(msg))
+                    self.page.overlay.append(snack)
+                    snack.open = True
+                    self.page.update()
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -599,7 +606,9 @@ class MemoryPanel(ft.Container):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        self.page.show_dialog(dialog)
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
 
     def _close_dialog(self, dialog: ft.AlertDialog) -> None:
         dialog.open = False
