@@ -149,6 +149,9 @@ class AssistantApp:
         # 点击后后台线程调 Agent.extract_now（AI 只提议 candidate），人再走 M3.2 拍板。
         self._extract_callback = self._make_extract_callback()
 
+        # 将记忆系统生命周期延长到实例属性，供 _build_ui 构造 MemoryPanel 使用
+        self._memory = memory
+
         self._setup_page(persona)
         self._build_ui(persona)
         self._start_ambience()
@@ -177,7 +180,7 @@ class AssistantApp:
         self.persona_status = PersonaStatusPanel(persona, avatar_provider=self.avatar_provider)
         self.chat_area = ChatArea(persona, avatar_provider=self.avatar_provider)
         self.input_bar = InputBar(on_send=self._on_send)
-        self.memory_panel = MemoryPanel(persona, memory=memory, on_extract=self._extract_callback)
+        self.memory_panel = MemoryPanel(persona, memory=self._memory, on_extract=self._extract_callback)
 
         self.middle = ft.Column(
             [self.chat_area, self.input_bar],
