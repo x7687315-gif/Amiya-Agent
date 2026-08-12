@@ -134,16 +134,13 @@ def _check_case2(mgr, cands):
 
 def _check_case3(mgr, cands):
     _assert_gate(mgr)
-    # 禁止把情绪固化成『长期/性格』事实
-    forbidden = [
-        "长期焦虑", "经常焦虑", "用户焦虑", "性格焦虑", "易焦虑",
-        "一直焦虑", "长期压力大", "总是焦虑", "天生焦虑",
-    ]
+    # 情绪/状态永远不能固化为 fact（特质）；允许 event（低权重共情）或不记
     for c in cands:
-        assert c["type"] != "fact" or not _hit(c["content"], forbidden), (
-            f"Case3: 情绪被误固化为特质事实: {c}"
-        )
-    # 允许：event 类（如『近期学习压力较大』）或干脆不记——总之不能是特质事实
+        assert c["type"] != "fact", f"Case3: 情绪被误固化为特质事实: {c}"
+    # 可选增强（M4.3）：若记，应为低权重 event，便于后续共情但不污染事实库
+    for c in cands:
+        if c["type"] == "event":
+            assert c["importance"] <= 4, f"Case3: 情绪 event 权重应较低: {c}"
 
 
 def _check_case4(mgr, cands):
