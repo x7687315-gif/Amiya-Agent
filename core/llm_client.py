@@ -19,6 +19,21 @@ class LLMClient(Protocol):
         """流式返回回复文本片段。history 为 [{role, content}]（不含 system）。"""
         ...
 
+    def chat(
+        self,
+        system: str,
+        history: List[Dict[str, str]],
+        *,
+        temperature: "float | None" = None,
+        max_tokens: "int | None" = None,
+    ) -> str:
+        """非流式：返回模型完整回复文本（结构化 JSON 抽取用，如 Step 2.7 记忆抽取）。
+
+        与 stream_chat 的区别：一次性返回整段，便于解析 JSON / 工具调用结果，
+        而不是逐 token 流式。具体实现（DeepSeek 等）自行决定如何聚合。
+        """
+        ...
+
 
 class DeepSeekLLMClient:
     def __init__(

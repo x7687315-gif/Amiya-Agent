@@ -19,6 +19,7 @@ from .embedder import (
     get_embedder,
 )
 from .extractor import ExtractedMemory, MemoryExtractor
+from .extraction_engine import ExtractionEngine
 from .manager import MemoryManager, new_session_id
 from .retrieval import MemoryRetriever, RetrievalHit, Weights, format_memory_block
 from .store import (
@@ -47,4 +48,5 @@ __all__ = [
     "format_memory_block",
     "MemoryExtractor",
     "ExtractedMemory",
+    "ExtractionEngine",
 ]

@@ -78,7 +78,7 @@
 
 | # | 项目 | 性质 | 当前状态 |
 |---|------|------|---------|
-| 3.1 | **Step 2.7 LLM 自动抽取** | 核心缺口 | **部分**：抽取器 seam（MemoryExtractor）+ 闸门隔离测试已落地；LLM 分类器与 Agent 接线仍待做（默认关） |
+| 3.1 | **Step 2.7 LLM 自动抽取** | 进行中 | **M1 已落地**：ExtractionEngine + parse_json_array + FakeLLM + 候选流程（134 测试通过）；真实 DeepSeek `chat()` / `Settings.extract_auto` / Agent 接线 / UI 闸门仍待做（默认关） |
 | 3.2 | **Emotion 支柱** | 补 `#11` seam | 仅留 `emotion_block=None` 占位 |
 | 3.3 | **记忆冲突消解**（Test3：旧 Python / 新 Rust） | 已知缺口 | 新旧记忆共存，旧 confidence 不自动下调 |
 | 3.4 | **sqlite-vec 实装** | 性能/架构 | 暴力余弦，替换点是单方法 |
@@ -193,4 +193,4 @@
 
 ---
 
-_最后更新：2026-08-11 · Step A Memory Gate 已落地（MemoryExtractor 抽取器 seam 只经候选闸门写记忆，绝不直写正表；7 项隔离测试通过，全量 127 测试通过）+ 验证 harness 增强（离线快速回退 + Gate 集成节 6/6 PASS，真实 bge 语义召回待你本机联网验证）。Phase 3 Persona Engine 已落地（core/persona 包 + 新注入顺序 + Relationship 独立存储）。_
+_最后更新：2026-08-12 · Step 2.7 M1 已落地（ExtractionEngine + parse_json_array + FakeLLM + 候选流程，新增 7 测试，全量 134 通过；真实 DeepSeek chat / 配置开关 / Agent 接线 / UI 闸门待做，默认关）。Step A Memory Gate 已落地。Phase 3 Persona Engine 已落地。_
