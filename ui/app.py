@@ -237,6 +237,9 @@ class AssistantApp:
             await asyncio.sleep(delay / 1000)
             ctrl.opacity = 1
             ctrl.update()
+        # InputBar 在 middle 内部、自身初始 opacity=0，需单独 reveal（否则底部输入框永久透明）
+        if self.input_bar is not None:
+            self.input_bar.reveal()
 
     def _start_ambience(self) -> None:
         """启动舰桥氛围：背景光晕呼吸 + 今日陪伴计时。"""
