@@ -26,6 +26,15 @@ import sys
 
 import pytest
 
+# 计算 HAS_KEY 前先加载 .env（load_dotenv 在 config 内部，但本模块在 import config
+# 之前就读取了 os.getenv，故这里显式加载一次，确保 `python -m pytest` 也能吃到 .env）。
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:  # pragma: no cover - python-dotenv 可选
+    pass
+
 from core.memory import MemoryManager, SQLiteMemoryStore
 from core.memory.extractor import MemoryExtractor
 from core.memory.extraction_engine import ExtractionEngine
