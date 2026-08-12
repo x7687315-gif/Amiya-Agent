@@ -89,3 +89,46 @@ class DeepSeekLLMClient:
                     continue
                 if delta:
                     yield delta
+
+    def chat(
+        self,
+        system: str,
+        history: List[Dict[str, str]],
+        *,
+        temperature: "float | None" = None,
+        max_tokens: "int | None" = None,
+    ) -> str:
+        """非流式单发：记忆抽取用（ExtractionEngine）。
+
+        与 stream_chat 共用同一端点（/chat/completions），仅 stream=False 一次性
+        取回完整回复，便于解析 JSON 候选数组。任何非 200 / 结构异常都抛 RuntimeError，
+        由上层（ExtractionEngine.extract）静默降级为 []——抽取失败绝不崩对话。
+
+        注意：本方法只服务于「结构化抽取」，不用于陪聊回复（回复走 stream_chat）。
+        """
+        messages = [{"role": "system", "content": system}] + list(history)
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature if temperature is None else float(temperature),
+            "max_tokens": self.max_tokens if max_tokens is None else int(max_tokens),
+            "stream": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(
+            self.url, json=payload, headers=headers, timeout=self.timeout
+        )
+        if resp.status_code != 200:
+            body = resp.text[:500]
+            raise RuntimeError(f"DeepSeek 返回 {resp.status_code}: {body}")
+        try:
+            obj = resp.json()
+        except ValueError:
+            raise RuntimeError(f"DeepSeek 返回非 JSON 响应: {resp.text[:200]}")
+        try:
+            return obj["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(f"DeepSeek 响应结构异常: {obj}") from exc
