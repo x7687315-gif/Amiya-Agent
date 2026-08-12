@@ -129,6 +129,14 @@ class Agent:
             self._history = self._history[-limit:]
 
     # ----- 记忆抽取（Step 2.7 M2.1） -----
+    @property
+    def can_extract(self) -> bool:
+        """是否有可用的抽取引擎（UI 据此决定是否显示「让助手整理候选」）。
+
+        对外暴露能力而非内部字段——避免上层越过边界读私有属性。
+        """
+        return self._extractor is not None
+
     def _maybe_extract(self) -> None:
         """自动抽取钩子：仅在 EXTRACT_AUTO=True 且注入了 extractor 时触发。
 
