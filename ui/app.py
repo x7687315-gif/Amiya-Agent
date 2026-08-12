@@ -129,10 +129,6 @@ class AssistantApp:
                 logger.exception("抽取引擎初始化失败，自动记忆整理将不可用")
                 extractor = None
 
-        # 记忆整理回调（M3）：仅当抽取引擎可用时，面板「让助手整理候选」按钮才生效。
-        # 点击后后台线程调 Agent.extract_now（AI 只提议 candidate），人再走 M3.2 拍板。
-        self._extract_callback = self._make_extract_callback(extractor)
-
         self.agent = Agent(
             persona=persona,
             llm=llm,
@@ -148,6 +144,10 @@ class AssistantApp:
             default_extract_window=settings.default_extract_window,
             manual_extract_window=settings.manual_extract_window,
         )
+
+        # 记忆整理回调（M3）：仅当抽取引擎可用时，面板「让助手整理候选」按钮才生效。
+        # 点击后后台线程调 Agent.extract_now（AI 只提议 candidate），人再走 M3.2 拍板。
+        self._extract_callback = self._make_extract_callback()
 
         self._setup_page(persona)
         self._build_ui(persona)
