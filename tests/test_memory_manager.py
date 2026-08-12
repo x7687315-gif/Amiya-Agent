@@ -195,6 +195,40 @@ def test_forget_blank_keyword_is_noop(mgr):
     assert len(mgr.list_memories()) == 1
 
 
+# ---------- M3：人修改 AI 的候选草稿（update_candidate） ----------
+
+
+def test_manager_update_candidate_clamps_and_validates(mgr):
+    cid = mgr.propose("preference", "喜欢机械键盘", importance=6)
+    assert mgr.update_candidate(cid, type="fact", importance=99, confidence=-3) is True
+    row = mgr.pending_candidates()[0]
+    assert row["type"] == "fact"
+    assert row["importance"] == 10  # 越界权重被钳制
+    assert row["confidence"] == 1
+
+
+def test_manager_update_candidate_bad_type_raises(mgr):
+    cid = mgr.propose("preference", "X")
+    with pytest.raises(ValueError):
+        mgr.update_candidate(cid, type="nonsense")
+
+
+def test_manager_update_candidate_blank_returns_false(mgr):
+    cid = mgr.propose("preference", "X")
+    assert mgr.update_candidate(cid, content="   ") is False
+
+
+def test_modify_then_confirm_writes_edited_version(mgr):
+    """M3.2 完整链路：人改 AI 草稿 → 确认 → 正表内容与修改一致。"""
+    cid = mgr.propose("preference", "喜欢机械键盘", importance=6)
+    assert mgr.update_candidate(cid, content="喜欢静音机械键盘", importance=9) is True
+    mid = mgr.confirm_candidate(cid)
+    assert mid > 0
+    mem = mgr.list_memories()[0]
+    assert mem["content"] == "喜欢静音机械键盘"
+    assert mem["importance"] == 9
+
+
 # ---------- Step 2.6：经 MemoryManager 渲染注入段落（清债 #1 的落点）----------
 
 

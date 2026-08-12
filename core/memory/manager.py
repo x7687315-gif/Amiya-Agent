@@ -331,6 +331,37 @@ class MemoryManager:
         """用户点「不用记」：标记 rejected，此后同内容不再打扰。"""
         return self._store.reject_candidate(cand_id)
 
+    def update_candidate(
+        self,
+        cand_id: int,
+        *,
+        type: Optional[str] = None,
+        content: Optional[str] = None,
+        importance: Optional[int] = None,
+        confidence: Optional[int] = None,
+    ) -> bool:
+        """人修改一条待确认候选（M3.2「修改」）。
+
+        AI 的草稿由人定稿：类型越界立即抛错，权重钳进合法区间，
+        空白/黑名单内容拦截在入口——不该记的东西连候选草稿都不该留。
+        改完仍是 pending，由人决定下一步确认或拒绝。
+        """
+        if type is not None:
+            self._check_type(type)
+        if content is not None:
+            content = content.strip() or None
+            if not content:
+                return False
+            if self._store.is_blacklisted(content):
+                return False
+        return self._store.update_candidate(
+            cand_id,
+            type=type,
+            content=content,
+            importance=None if importance is None else _clamp(importance, 1, 10),
+            confidence=None if confidence is None else _clamp(confidence, 1, 5),
+        )
+
     # ----- Agent 状态（persona_state，与用户记忆分表） -----
     def state(self) -> Dict[str, object]:
         return self._store.load_state()

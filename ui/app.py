@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from typing import Callable, Optional
 
 # 允许 `python ui/app.py` 直接运行（把项目根加入 path）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -128,6 +129,10 @@ class AssistantApp:
                 logger.exception("抽取引擎初始化失败，自动记忆整理将不可用")
                 extractor = None
 
+        # 记忆整理回调（M3）：仅当抽取引擎可用时，面板「让助手整理候选」按钮才生效。
+        # 点击后后台线程调 Agent.extract_now（AI 只提议 candidate），人再走 M3.2 拍板。
+        self._extract_callback = self._make_extract_callback(extractor)
+
         self.agent = Agent(
             persona=persona,
             llm=llm,
@@ -172,7 +177,7 @@ class AssistantApp:
         self.persona_status = PersonaStatusPanel(persona, avatar_provider=self.avatar_provider)
         self.chat_area = ChatArea(persona, avatar_provider=self.avatar_provider)
         self.input_bar = InputBar(on_send=self._on_send)
-        self.memory_panel = MemoryPanel(persona, memory=memory)
+        self.memory_panel = MemoryPanel(persona, memory=memory, on_extract=self._extract_callback)
 
         self.middle = ft.Column(
             [self.chat_area, self.input_bar],
@@ -260,6 +265,24 @@ class AssistantApp:
                     self.persona_status.set_companionship_minutes(mins)
         except asyncio.CancelledError:
             return
+
+    def _make_extract_callback(self) -> "Optional[Callable[[], int]]":
+        """构造「让助手整理候选」回调（仅抽取引擎可用时非 None）。
+
+        返回 callable：调用即在后台线程跑 Agent.extract_now，返回新入队候选数；
+        抽取引擎缺失 / Agent 未就绪时返回 None，面板即不显示该按钮。
+        """
+        agent = self.agent
+        if agent is None or not agent.can_extract:
+            return None
+
+        def _run() -> int:
+            try:
+                return len(agent.extract_now() or [])
+            except Exception:  # noqa: BLE001 - 抽取失败只降级，绝不崩 UI
+                return -1
+
+        return _run
 
     def _open_drawer(self) -> None:
         if self.drawer is not None and self.page is not None:

@@ -100,20 +100,65 @@ def test_memory_panel(persona):
     store = SQLiteMemoryStore(":memory:")
     mgr = MemoryManager(store)
     mgr.remember("fact", "用户喜欢爬山", importance=6)
+    mgr.remember("preference", "爱喝咖啡", importance=4)
     mgr.remember("goal", "想学吉他", importance=5)
     mgr.remember("event", "今天去了公园", importance=4)
+    mgr.remember("relationship", "和助手是伙伴", importance=5)
     mgr.propose("preference", "爱喝咖啡", reason="提过几次")
 
     panel = MemoryPanel(persona, memory=mgr)
-    # 三个分区各至少 1 条记忆 + 1 条待确认候选
-    assert len(panel._long_term_col.controls) >= 1
-    assert len(panel._goals_col.controls) >= 1
-    assert len(panel._events_col.controls) >= 1
+    # M3.3：我的记忆五分类各至少 1 条 + M3.1 候选 1 条
+    assert len(panel._cat_cols["fact"].controls) >= 1
+    assert len(panel._cat_cols["preference"].controls) >= 1
+    assert len(panel._cat_cols["goal"].controls) >= 1
+    assert len(panel._cat_cols["event"].controls) >= 1
+    assert len(panel._cat_cols["relationship"].controls) >= 1
     assert len(panel._cand_col.controls) >= 1
 
     # 记忆功能未启用时只显示一条空态提示
     disabled = MemoryPanel(persona, memory=None)
-    assert len(disabled._long_term_col.controls) == 1
+    assert len(disabled._cand_col.controls) == 1
+    for col in disabled._cat_cols.values():
+        assert len(col.controls) == 1
+
+
+def _control_texts(ctrl):
+    """递归收集控件树里出现的文本，便于断言候选卡片的动作按钮。
+
+    覆盖 flet 两种文本存储：Text/TextField 用 `.value`，按钮用 `.content`(str)。
+    """
+    found = set()
+    stack = [ctrl]
+    while stack:
+        c = stack.pop()
+        for attr in ("text", "value"):
+            v = getattr(c, attr, None)
+            if isinstance(v, str):
+                found.add(v)
+        content = getattr(c, "content", None)
+        if isinstance(content, str):
+            found.add(content)
+        elif content is not None and content is not c:
+            stack.append(content)
+        for child in getattr(c, "controls", None) or []:
+            stack.append(child)
+    return found
+
+
+def test_memory_panel_candidate_has_three_actions(persona):
+    """M3.2：每条候选必须同时具备确认 / 修改 / 拒绝三个操作。"""
+    from core.memory import MemoryManager, SQLiteMemoryStore
+
+    store = SQLiteMemoryStore(":memory:")
+    mgr = MemoryManager(store)
+    mgr.propose("preference", "爱喝咖啡", reason="提过几次")
+
+    panel = MemoryPanel(persona, memory=mgr)
+    card = panel._cand_col.controls[0]
+    texts = _control_texts(card)
+    assert "确认" in texts
+    assert "修改" in texts
+    assert "拒绝" in texts
 
 
 def test_thinking_overlay_phases():

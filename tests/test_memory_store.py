@@ -219,6 +219,43 @@ def test_purge_candidates_by_keyword():
     assert [c["content"] for c in s.pending_candidates()] == ["公开的事"]
 
 
+# ---------- M3：人修改 AI 的候选草稿（update_candidate） ----------
+
+
+def test_update_candidate_changes_content_stays_pending():
+    s = _store()
+    cid = s.add_candidate("preference", "喜欢机械键盘", importance=6, reason="x")
+    assert s.update_candidate(cid, content="喜欢静音键盘", importance=8) is True
+    row = s.candidate(cid)
+    assert row["content"] == "喜欢静音键盘"
+    assert row["importance"] == 8
+    assert row["status"] == "pending"  # 改完仍 pending，不转正、不丢弃
+    assert s.memories(types=("preference",)) == []  # 尚未进正表
+
+
+def test_update_candidate_only_pending_is_editable():
+    s = _store()
+    cid = s.add_candidate("fact", "A")
+    assert s.confirm_candidate(cid) > 0
+    assert s.update_candidate(cid, content="X") is False  # 已确认不可改
+    assert s.candidate(cid)["content"] == "A"
+
+
+def test_update_candidate_unknown_id_is_false():
+    s = _store()
+    assert s.update_candidate(9999, content="X") is False
+
+
+def test_update_candidate_unique_conflict_returns_false():
+    s = _store()
+    s.add_candidate("fact", "A")
+    cid2 = s.add_candidate("fact", "B")
+    # 把 B 改成 A（与已存在 pending 的 A 冲突）→ 不破坏任何字段
+    assert s.update_candidate(cid2, content="A") is False
+    assert s.candidate(cid2)["content"] == "B"  # 原值不变
+    assert s.pending_candidates() == [] or len(s.pending_candidates()) == 2
+
+
 def test_migration_v1_db_upgrades_to_v2(tmp_path):
     """已装机的 v1 库再次打开时应平滑升到 v2，且原数据不丢。"""
     import sqlite3

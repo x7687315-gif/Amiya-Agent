@@ -191,6 +191,15 @@ class MemoryStore(Protocol):
     def candidate(self, cand_id: int) -> Optional[Dict[str, object]]: ...
     def confirm_candidate(self, cand_id: int) -> int: ...
     def reject_candidate(self, cand_id: int) -> bool: ...
+    def update_candidate(
+        self,
+        cand_id: int,
+        *,
+        type: Optional[str] = None,
+        content: Optional[str] = None,
+        importance: Optional[int] = None,
+        confidence: Optional[int] = None,
+    ) -> bool: ...
     def purge_candidates_by_keyword(self, keyword: str) -> int: ...
     def load_state(self) -> Dict[str, object]: ...
     def save_state(self, **fields) -> None: ...
@@ -544,6 +553,46 @@ class SQLiteMemoryStore:
             )
             self._conn.commit()
             return cur.rowcount > 0
+
+    def update_candidate(
+        self,
+        cand_id: int,
+        *,
+        type: Optional[str] = None,
+        content: Optional[str] = None,
+        importance: Optional[int] = None,
+        confidence: Optional[int] = None,
+    ) -> bool:
+        """人修改一条待确认候选（AI 的草稿由人定稿）。仅 pending 可改，改完仍 pending。
+
+        M3.2 的「修改」操作落点：与 confirm/reject 正交——修改不转正、不丢弃，
+        只是让人把 AI 的提议改到满意，再决定确认或拒绝。
+
+        UNIQUE(type, content) 冲突（改成已存在的同 type+content）时回滚并返回 False，
+        不改任何字段；越界类型/权重在此不校验（交由 MemoryManager 层钳制）。
+        """
+        fields = {
+            "type": type,
+            "content": content,
+            "importance": importance,
+            "confidence": confidence,
+        }
+        pairs = [(k, v) for k, v in fields.items() if v is not None]
+        if not pairs:
+            return False
+        sets = ", ".join(f"{k}=?" for k, _ in pairs)
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    f"UPDATE memory_candidate SET {sets} "
+                    f"WHERE id=? AND status='pending'",
+                    [v for _, v in pairs] + [cand_id],
+                )
+                self._conn.commit()
+                return cur.rowcount > 0
+            except sqlite3.IntegrityError:  # UNIQUE(type, content) 冲突
+                self._conn.rollback()
+                return False
 
     def purge_candidates_by_keyword(self, keyword: str) -> int:
         """清掉候选队列里匹配关键词的待确认项，返回清理条数。
