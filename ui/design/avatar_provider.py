@@ -65,7 +65,8 @@ class TextAvatarProvider(AvatarProvider):
 class ImageAvatarProvider(AvatarProvider):
     """图像头像提供方（未来启用）：按情绪状态键读取 resources/avatar/<state>.png。
 
-    文件缺失时回退到 fallback（默认文字头像），保证可用性。
+    若 <state>.png 缺失，会尝试同目录下的 default.png，仍缺失才回退到 fallback
+    （默认文字头像），保证可用性并避免未来多情绪头像时的闪烁。
     """
 
     def __init__(
@@ -87,6 +88,8 @@ class ImageAvatarProvider(AvatarProvider):
         **kwargs,
     ) -> ft.Control:
         path = os.path.join(self._folder, f"{state_key}.png")
+        if not os.path.isfile(path):
+            path = os.path.join(self._folder, "default.png")
         if os.path.isfile(path):
             return ft.CircleAvatar(
                 radius=radius,

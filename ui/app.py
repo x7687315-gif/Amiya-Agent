@@ -40,7 +40,7 @@ from ui.components.input_bar import InputBar  # noqa: E402
 from ui.components.memory_panel import MemoryPanel  # noqa: E402
 from ui.components.persona_drawer import PersonaDrawer  # noqa: E402
 from ui.components.persona_status import PersonaStatusPanel  # noqa: E402
-from ui.design.avatar_provider import TextAvatarProvider  # noqa: E402
+from ui.design.avatar_provider import ImageAvatarProvider, TextAvatarProvider  # noqa: E402
 from ui.theme import ALIGN_CENTER, ALIGN_TOP_CENTER, c, layout, anim  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,7 +51,7 @@ class AssistantApp:
     def __init__(self) -> None:
         self.page: ft.Page | None = None
         self.agent: Agent | None = None
-        self.avatar_provider: TextAvatarProvider | None = None
+        self.avatar_provider: "ImageAvatarProvider | TextAvatarProvider | None" = None
         self.header: Header | None = None
         self.persona_status: PersonaStatusPanel | None = None
         self.chat_area: ChatArea | None = None
@@ -77,7 +77,10 @@ class AssistantApp:
             self._fatal(f"人格配置加载失败：{e}")
             return
 
-        self.avatar_provider = TextAvatarProvider(text="阿", bgcolor=c.PRIMARY, text_color=c.ON_PRIMARY)
+        self.avatar_provider = ImageAvatarProvider(
+            folder=os.path.join(os.path.dirname(__file__), "..", "resources", "avatar"),
+            fallback=TextAvatarProvider(text="阿", bgcolor=c.PRIMARY, text_color=c.ON_PRIMARY),
+        )
         # 记忆系统：启用时才建（MEMORY_ENABLED=1）。失败不致命——助手退回纯内存。
         memory = None
         if settings.memory_enabled:
