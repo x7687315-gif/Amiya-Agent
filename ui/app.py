@@ -70,7 +70,6 @@ class AssistantApp:
         self.memory_panel: MemoryPanel | None = None
         self.middle: ft.Column | None = None
         self.drawer: PersonaDrawer | None = None
-        self._glow: ft.Container | None = None
         self._session_start: float = 0.0
         # 语音链路默认值：保证 run() 之前访问这些属性也不崩（测试可注入替换）。
         # tts 默认 None——未 run 就点朗读属异常路径，静默跳过而非 AttributeError。
@@ -381,23 +380,19 @@ class AssistantApp:
             ctrl.opacity = 0
             ctrl.animate_opacity = ft.Animation(anim.NORMAL, anim.EASE_OUT)
 
-        # 舰桥基调背景：极淡青色光晕（呼吸）
-        self._glow = ft.Container(
-            width=560,
-            height=560,
-            border_radius=ft.BorderRadius.only(
-                top_left=560, top_right=560, bottom_left=560, bottom_right=560
-            ),
-            bgcolor=c.BRIDGE_ACCENT,
-            opacity=0.10,
-        )
         # 皮肤壁纸（与头像同源）：全屏铺底 + 浅色遮罩保证前景可读 + 舰桥光晕。
         # 皮肤资源缺失时退化为纯色背景（c.BG），行为与皮肤系统上线前一致。
+        # 背景三层（用户方案 2026-08-17）：壁纸右缘主色铺底 → 壁纸（烘焙为
+        # 2560x1600 左置画布，右缘即延伸色，接缝无缝）→ 浅色遮罩保可读。
+        # 中央光晕（舰桥基调）已删：壁纸背景下是一个突兀的大圆形。
         bg_layers: list[ft.Control] = []
+        dominant = (
+            self._skin_ctx.skin.dominant_color if self._skin_ctx else None
+        ) or c.BG
+        bg_layers.append(ft.Container(bgcolor=dominant, expand=True))
         bg_path = self._skin_ctx.background_path if self._skin_ctx else None
         if bg_path and os.path.isfile(str(bg_path)):
             bg_layers.append(
-                # Flet 0.86.5 的适配枚举叫 BoxFit（无 ft.ImageFit，用错启动即崩）
                 ft.Image(src=str(bg_path), fit=ft.BoxFit.COVER, expand=True)
             )
             bg_layers.append(
@@ -407,11 +402,6 @@ class AssistantApp:
                     expand=True,
                 )
             )
-        else:
-            bg_layers.append(ft.Container(bgcolor=c.BG, expand=True))
-        bg_layers.append(
-            ft.Container(content=self._glow, alignment=ALIGN_TOP_CENTER, expand=True)
-        )
         bg = ft.Stack(bg_layers, expand=True)
         root = ft.Stack([bg, ft.Column([self.header, body], expand=True)], expand=True)
 
@@ -439,25 +429,10 @@ class AssistantApp:
             self.input_bar.reveal()
 
     def _start_ambience(self) -> None:
-        """启动舰桥氛围：背景光晕呼吸 + 今日陪伴计时。"""
+        """启动陪伴计时（背景光晕已随壁纸方案移除）。"""
         assert self.page is not None
         self._session_start = time.monotonic()
-        self.page.run_task(self._breathe)
         self.page.run_task(self._tick_companionship)
-
-    async def _breathe(self) -> None:
-        try:
-            while True:
-                if self._glow is not None:
-                    self._glow.opacity = 0.16
-                    self._glow.update()
-                await asyncio.sleep(anim.BREATH_MS / 1000)
-                if self._glow is not None:
-                    self._glow.opacity = 0.06
-                    self._glow.update()
-                await asyncio.sleep(anim.BREATH_MS / 1000)
-        except asyncio.CancelledError:
-            return
 
     async def _tick_companionship(self) -> None:
         try:

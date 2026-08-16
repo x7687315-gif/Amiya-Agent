@@ -62,6 +62,7 @@ class Skin:
     scrim_opacity: float = 0.8  # 壁纸上的浅色遮罩不透明度（保证前景可读）
     emotion: Optional[str] = None  # 仅信息性：默认映射情绪
     is_manual_only: bool = False  # True = 仅手动可选（sakura / sunset）
+    dominant_color: Optional[str] = None  # 壁纸右缘主色：背景铺底延伸色（用户方案）
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,7 @@ class SkinManager:
                     scrim_opacity=float(raw.get("scrim_opacity", 0.8)),
                     emotion=raw.get("emotion"),
                     is_manual_only=bool(raw.get("is_manual_only", False)),
+                    dominant_color=(raw.get("dominant_color") or None),
                 )
             except Exception:  # noqa: BLE001 - 单皮肤损坏只跳过
                 continue

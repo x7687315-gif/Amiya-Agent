@@ -461,3 +461,13 @@ def test_apply_skin_runtime_defers_to_event_loop():
 
     asyncio.run(scheduled[0]())
     assert app._rebuilding is False  # 完成后复位
+
+
+def test_all_skins_have_dominant_color():
+    """用户方案：每套皮肤烘焙后必须带 dominant_color（主色铺底延伸）。"""
+    m = SkinManager()
+    m.load_skins()
+    assert m.registry
+    for sid, skin in m.registry.items():
+        assert skin.dominant_color and skin.dominant_color.startswith("#"), sid
+        assert len(skin.dominant_color) == 7  # #RRGGBB
