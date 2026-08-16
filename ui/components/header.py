@@ -20,12 +20,14 @@ class Header(ft.Container):
         on_persona_click: Callable[[], None] | None = None,
         avatar_provider: AvatarProvider | None = None,
         mute_state: Optional["MuteState"] = None,
+        on_new_chat: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__()
         self.persona = persona
         self.on_persona_click = on_persona_click
         self._avatar_provider = avatar_provider
         self._mute_state = mute_state
+        self._on_new_chat = on_new_chat
 
         self._status_text = ft.Text("在线", color=c.TEXT_MUTED, size=t.CAPTION)
         self._status_dot = self._build_dot()
@@ -39,6 +41,13 @@ class Header(ft.Container):
             icon_color=c.TEXT_SECONDARY,
             tooltip="查看人格",
             on_click=lambda _e: self.on_persona_click() if self.on_persona_click else None,
+        )
+        self._new_chat_btn = ft.IconButton(
+            icon=ft.Icons.ADD_COMMENT_ROUNDED,
+            icon_color=c.TEXT_SECONDARY,
+            tooltip="开启新对话（当天聊天仍可在日期里回看）",
+            visible=on_new_chat is not None,
+            on_click=lambda _e: self._on_new_chat() if self._on_new_chat else None,
         )
         self._mute_btn = self._build_mute_btn()
         self._build()
@@ -97,6 +106,7 @@ class Header(ft.Container):
                     expand=True,
                 ),
                 self._status_row,
+                self._new_chat_btn,
                 self._mute_btn,
                 self._persona_btn,
             ],

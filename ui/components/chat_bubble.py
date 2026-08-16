@@ -8,6 +8,7 @@ import flet as ft
 from ui.theme import c, t, sp, r, layout
 from ui.components.avatar import make_avatar
 from ui.components.speaker import MuteState
+from ui.components.tts_status import TTSStatusState
 from ui.design.avatar_provider import AvatarProvider
 
 
@@ -51,6 +52,7 @@ class ChatBubble:
         max_width_ratio: float = layout.AI_BUBBLE_MAX_RATIO,
         on_speak: Callable[[str], None] | None = None,
         mute_state: Optional["MuteState"] = None,
+        tts_state: Optional["TTSStatusState"] = None,
     ) -> ft.Control:
         """助手气泡（左侧，白底描边）。
 
@@ -60,6 +62,8 @@ class ChatBubble:
             on_speak: 可选朗读回调；提供则在气泡末尾追加 🔊 按钮，
                 点击时朗读「本气泡自己的文本」（读 text_control.value，而非全局最新回复）。
             mute_state: 可选全局静音状态；提供则 🔊 按钮订阅它，静音时自动隐藏。
+            tts_state: 可选语音忙碌状态；提供则 🔊 订阅它，合成/播放中禁用并转圈
+                （顺带把连点并发合成收敛为串行）。
         """
         content = text_control or ft.Text(
             text,
@@ -89,6 +93,7 @@ class ChatBubble:
 
         # M3-B：每个最终助手气泡末尾挂一个 🔊，点它只读这一句
         mute_cb = None
+        tts_cb = None
         if on_speak is not None:
             speaker = ft.IconButton(
                 icon=ft.Icons.VOLUME_UP,
@@ -106,11 +111,26 @@ class ChatBubble:
                 except Exception:  # noqa: BLE001 - 未挂载控件 update 会抛，忽略即可
                     pass
 
+            def _apply_busy(busy: bool) -> None:
+                # 合成/播放忙碌：禁用并转圈，防止连点并发合成
+                speaker.disabled = busy
+                speaker.icon = (
+                    ft.Icons.HOURGLASS_TOP_ROUNDED if busy else ft.Icons.VOLUME_UP
+                )
+                speaker.tooltip = "语音生成/播放中…" if busy else "朗读这句"
+                try:
+                    speaker.update()
+                except Exception:  # noqa: BLE001
+                    pass
+
             if mute_state is not None:
                 mute_state.subscribe(_apply_mute)
                 mute_cb = _apply_mute
             else:
                 speaker.visible = True
+            if tts_state is not None:
+                tts_state.subscribe(_apply_busy)
+                tts_cb = _apply_busy
             row.append(speaker)
 
         holder = ft.Row(
@@ -118,10 +138,13 @@ class ChatBubble:
             spacing=sp.SM,
             vertical_alignment=ft.CrossAxisAlignment.START,
         )
+        # 供 ChatArea.clear() 退订，防止气泡销毁后订阅闭包滞留状态对象（泄漏）
         if mute_state is not None and mute_cb is not None:
-            # 供 ChatArea.clear() 退订，防止气泡销毁后订阅闭包滞留 MuteState（泄漏）
             holder._mute_state = mute_state  # type: ignore[attr-defined]
             holder._mute_cb = mute_cb  # type: ignore[attr-defined]
+        if tts_state is not None and tts_cb is not None:
+            holder._tts_state = tts_state  # type: ignore[attr-defined]
+            holder._tts_cb = tts_cb  # type: ignore[attr-defined]
         return holder
 
     @staticmethod

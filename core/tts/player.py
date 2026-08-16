@@ -115,6 +115,28 @@ class AudioPlayer:
             finally:
                 self._queue.task_done()
 
+    def stop_all(self) -> None:
+        """停止当前播放并清空未播的队列（静音开关 / 停止按钮用）。
+
+        winsound.PlaySound(None, 0) 是进程全局停止：会打断工作线程正在播的
+        那一条（其阻塞调用随即返回并做文件清理），pending 的条目直接丢弃。
+        """
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self._queue.task_done()
+        try:
+            if _HAS_WINSOUND:
+                winsound.PlaySound(None, 0)
+        except Exception as exc:  # noqa: BLE001 - 停止失败不致命
+            logger.debug("停止播放失败：%s", exc)
+
+    def wait_all(self) -> None:
+        """阻塞直到队列中所有音频播完（后台线程调用，勿在 UI 线程用）。"""
+        self._queue.join()
+
     def play(self, audio: AudioData) -> bool:
         """播放一个 AudioData。成功返回 True，任何失败返回 False（不抛异常）。"""
         if audio is None or not getattr(audio, "data", b""):

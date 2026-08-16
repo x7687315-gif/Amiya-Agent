@@ -1,7 +1,12 @@
-"""输入栏组件：多行输入框 + 发送按钮 + 字数提示。"""
+"""输入栏组件：多行输入框 + 发送/停止按钮 + 字数提示。
+
+生成中（loading）且提供 on_stop 时，发送键变成红色停止键——满足总设计
+「停止生成」：流式卡住不必干等 30s 超时。未提供 on_stop 时保持旧行为
+（转圈禁用），兼容现有调用方与测试。
+"""
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
 import flet as ft
 
@@ -15,9 +20,11 @@ class InputBar(ft.Container):
         self,
         on_send: Callable[[str], None],
         max_lines: int = 4,
+        on_stop: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__()
         self.on_send = on_send
+        self.on_stop = on_stop
         self._max_lines = max_lines
         self._is_loading = False
 
@@ -121,16 +128,35 @@ class InputBar(ft.Container):
         self._update_send_btn(False)
         self.on_send(text)
 
+    def _handle_stop(self, _e: ft.ControlEvent | None) -> None:
+        if self._is_loading and self.on_stop is not None:
+            self.on_stop()
+
     def set_loading(self, loading: bool) -> None:
-        """设置发送加载状态。"""
+        """设置发送加载状态。
+
+        loading=True 且注入了 on_stop：发送键切换为「停止生成」键（可点击）；
+        否则维持原转圈禁用行为。False 时一律恢复发送键。
+        """
         self._is_loading = loading
         self._field.disabled = loading
         if loading:
-            self._send_btn.icon = ft.ProgressRing(color=c.PRIMARY, width=18, height=18, stroke_width=2)
-            self._send_btn.disabled = True
-            self._send_btn.bgcolor = c.SURFACE_SECONDARY
+            if self.on_stop is not None:
+                self._send_btn.icon = ft.Icons.STOP_CIRCLE_ROUNDED
+                self._send_btn.tooltip = "停止生成"
+                self._send_btn.disabled = False
+                self._send_btn.bgcolor = c.ERROR
+                self._send_btn.icon_color = c.ON_PRIMARY
+                self._send_btn.on_click = self._handle_stop
+            else:
+                self._send_btn.icon = ft.ProgressRing(color=c.PRIMARY, width=18, height=18, stroke_width=2)
+                self._send_btn.disabled = True
+                self._send_btn.bgcolor = c.SURFACE_SECONDARY
         else:
             self._send_btn.icon = ft.Icons.SEND_ROUNDED
+            self._send_btn.tooltip = "发送"
+            self._send_btn.on_click = self._handle_send
+            self._send_btn.icon_color = c.TEXT_MUTED
             self._update_send_btn(bool((self._field.value or "").strip()))
         self._send_btn.update()
         self._field.update()

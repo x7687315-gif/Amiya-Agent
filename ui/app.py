@@ -45,6 +45,7 @@ from ui.components.memory_panel import MemoryPanel  # noqa: E402
 from ui.components.persona_drawer import PersonaDrawer  # noqa: E402
 from ui.components.persona_status import PersonaStatusPanel  # noqa: E402
 from ui.components.speaker import MuteState  # noqa: E402
+from ui.components.tts_status import TTSStatusBanner, TTSStatusState  # noqa: E402
 from ui.design.avatar_provider import ImageAvatarProvider, TextAvatarProvider  # noqa: E402
 from ui.theme import ALIGN_CENTER, ALIGN_TOP_CENTER, c, layout, anim  # noqa: E402
 
@@ -72,6 +73,11 @@ class AssistantApp:
         self.mute_state = MuteState()
         self.player = AudioPlayer()
         self.tts: TTSService | None = None
+        self.tts_state = TTSStatusState()  # 合成/播放忙碌态（🔊 转圈外显）
+        self.tts_banner: TTSStatusBanner | None = None  # TTS 不可用提示条
+        self._tts_voice = "assistant"
+        self._tts_lang = "zh"
+        self._settings = None
         self._memory = None
         self._extract_callback = None
 
@@ -166,12 +172,20 @@ class AssistantApp:
         self._extract_callback = self._make_extract_callback()
 
         # M3 语音朗读链路：与 Agent / LLM 完全解耦，失败降级不致命。
-        # - MuteState：全局语音开关（ observable，默认开）。
-        # - AudioPlayer：本地 wav 播放（winsound 后端，零依赖）。
+        # - MuteState：全局语音开关（observable，默认开）。
+        # - AudioPlayer：本地 wav 播放（winsound 后端，零依赖，FIFO 串行）。
         # - TTSService：薄 HTTP 客户端，把文本送去已运行的 GPT-SoVITS API。
+        # - voice / lang 来自 .env（TTS_VOICE / TTS_TEXT_LANG），换声音不改代码。
         self.mute_state = MuteState()
         self.player = AudioPlayer()
         self.tts = TTSService()  # 默认加载 assistant 语音档案
+        self._tts_voice = settings.tts_voice
+        self._tts_lang = settings.tts_text_lang
+        self._settings = settings
+        # 静音即刻停掉正在播/排队的语音（用户预期：按下静音，世界安静）
+        self.mute_state.subscribe(
+            lambda muted: self.player.stop_all() if muted else None
+        )
 
         # 将记忆系统生命周期延长到实例属性，供 _build_ui 构造 MemoryPanel 使用
         self._memory = memory
@@ -180,6 +194,43 @@ class AssistantApp:
         self._build_ui(persona)
         self._start_ambience()
         self._init_history_ui()  # 时间轴：滚动清理 + 回显今天的对话 + 日期下拉
+        if self.page is not None:
+            self.page.run_thread(self._check_tts_service)  # 后台探活，慢不挡 UI
+
+    def _check_tts_service(self) -> None:
+        """TTS 探活：不可用则亮提示条（总设计 §16：语音挂了要告知，聊天不崩）。"""
+        if self.tts is None:
+            return
+        try:
+            ok = self.tts.health_check()
+        except Exception:  # noqa: BLE001 - 探活异常同样视为不可用
+            ok = False
+        if not ok:
+            self._notify_tts_unavailable(
+                "语音服务未启动——文字聊天不受影响。需要语音时请先运行 start_assistant.bat。"
+            )
+
+    def _notify_tts_unavailable(self, message: str) -> None:
+        if self.tts_banner is not None:
+            self.tts_banner.show(message)
+
+    def _on_stop(self) -> None:
+        """停止生成本轮回复：已生成的部分会照常保留并落库（Agent 保证）。"""
+        if self.agent is not None:
+            self.agent.request_stop()
+
+    def _on_new_chat(self) -> None:
+        """开启新对话：轮换 session、清空短期窗口与当前视图。
+
+        只清屏不删库——当天已聊的内容仍归档在「今天」，可从日期导航回看。
+        """
+        if self.agent is not None:
+            try:
+                self.agent.reset()
+            except Exception:  # noqa: BLE001 - 轮换失败不致命
+                logger.exception("新会话轮换失败（已忽略）")
+        if self.chat_area is not None:
+            self.chat_area.clear()
 
     # ----- 时间轴（按日期浏览对话） -----
     def _today_str(self) -> str:
@@ -260,6 +311,7 @@ class AssistantApp:
             on_persona_click=self._open_drawer,
             avatar_provider=self.avatar_provider,
             mute_state=self.mute_state,
+            on_new_chat=self._on_new_chat,
         )
         self.persona_status = PersonaStatusPanel(persona, avatar_provider=self.avatar_provider)
         self.chat_area = ChatArea(
@@ -267,13 +319,15 @@ class AssistantApp:
             avatar_provider=self.avatar_provider,
             on_speak=self._speak_async,
             mute_state=self.mute_state,
+            tts_state=self.tts_state,
         )
-        self.input_bar = InputBar(on_send=self._on_send)
+        self.input_bar = InputBar(on_send=self._on_send, on_stop=self._on_stop)
         self.date_nav = DateNav(on_day_change=self._on_day_change, today=self._today_str())
+        self.tts_banner = TTSStatusBanner()
         self.memory_panel = MemoryPanel(persona, memory=self._memory, on_extract=self._extract_callback)
 
         self.middle = ft.Column(
-            [self.date_nav, self.chat_area, self.input_bar],
+            [self.date_nav, self.tts_banner, self.chat_area, self.input_bar],
             expand=True,
             spacing=0,
         )
@@ -389,12 +443,13 @@ class AssistantApp:
         self.page.run_thread(self._speak, text)
 
     def _speak(self, text: str) -> None:
-        """朗读一句台词：TTS 合成 → 本地播放。失败只降级，不抛、不拖垮 UI。
+        """朗读一句台词：TTS 合成 → 排队播放，全程忙碌态外显（🔊 转圈）。
 
-        原则（M3）：语音失败 ≠ Agent 失败。合成或播放失败都静默跳过本条朗读。
-        整个链路（网络合成 + 本地播放）都在后台线程跑（_speak_async 经 run_thread
-        调度），不阻塞 UI；AudioPlayer 内部用唯一工作线程按 FIFO 串行播放，
-        连点多个气泡不会互相截断。
+        原则（M3）：语音失败 ≠ Agent 失败。合成/播放失败不抛、不拖垮 UI，
+        但要给用户可见反馈（提示条）——不再只写日志。
+        整个链路在后台线程跑（_speak_async 经 run_thread 调度）；
+        忙碌态从合成开始持续到队列播完（wait_all），期间所有 🔊 禁用，
+        连点自然收敛为串行。AudioPlayer 内部 FIFO 串行播放不互相截断。
         """
         if not text or not text.strip():
             return  # 空文本 / 纯空白：没有可朗读内容，跳过
@@ -403,16 +458,29 @@ class AssistantApp:
         if self.mute_state is not None and self.mute_state.muted:
             return  # 全局静音：直接跳过，不发任何 TTS 请求
         logger.info("正在为文本请求助手语音：%s", text[:40])
-        result = self.tts.synthesize(text=text, voice="assistant", text_lang="zh")
-        if self.mute_state is not None and self.mute_state.muted:
-            return  # 合成期间被静音：结果作废，不播（网络往返 1-2s，存在窗口期）
-        if result.success and result.audio is not None and getattr(result.audio, "data", b""):
-            if self.player.play(result.audio):
-                logger.info("助手语音已排队播放")
+        self.tts_state.set_busy(True)
+        try:
+            result = self.tts.synthesize(
+                text=text, voice=self._tts_voice, text_lang=self._tts_lang
+            )
+            if self.mute_state is not None and self.mute_state.muted:
+                return  # 合成期间被静音：结果作废，不播
+            if result.success and result.audio is not None and getattr(result.audio, "data", b""):
+                if self.player.play(result.audio):
+                    logger.info("助手语音已排队播放")
+                    self.player.wait_all()  # 后台线程里等播完：忙碌态覆盖播放期
+                    if self.tts_banner is not None:
+                        self.tts_banner.hide()  # 本条成功：撤掉不可用提示
+                else:
+                    logger.warning("助手语音播放失败（winsound 不可用或音频无效）")
+                    self._notify_tts_unavailable("本条语音播放失败（播放后端不可用）。")
             else:
-                logger.warning("助手语音播放失败（winsound 不可用或音频无效）")
-        else:
-            logger.warning("助手语音合成失败，本条不朗读：%s", result.error)
+                logger.warning("助手语音合成失败，本条不朗读：%s", result.error)
+                self._notify_tts_unavailable(
+                    "语音服务暂不可用，这条不朗读；文字聊天不受影响。"
+                )
+        finally:
+            self.tts_state.set_busy(False)
 
     def _open_drawer(self) -> None:
         if self.drawer is not None and self.page is not None:

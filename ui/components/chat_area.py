@@ -8,9 +8,10 @@ import flet as ft
 from ui.theme import ALIGN_CENTER, c, t, sp, r, layout, anim
 from ui.components.chat_bubble import ChatBubble
 from ui.components.date_nav import format_day
-from ui.components.thinking_overlay import ThinkingOverlay
-from ui.components.empty_state import EmptyState
 from ui.components.speaker import MuteState
+from ui.components.thinking_overlay import ThinkingOverlay
+from ui.components.tts_status import TTSStatusState
+from ui.components.empty_state import EmptyState
 from ui.design.avatar_provider import AvatarProvider
 
 
@@ -23,12 +24,14 @@ class ChatArea(ft.Container):
         avatar_provider: AvatarProvider | None = None,
         on_speak: Callable[[str], None] | None = None,
         mute_state: Optional["MuteState"] = None,
+        tts_state: Optional["TTSStatusState"] = None,
     ) -> None:
         super().__init__()
         self.persona = persona
         self._avatar_provider = avatar_provider
         self._on_speak = on_speak
         self._mute_state = mute_state
+        self._tts_state = tts_state
         self._has_messages = False
         self._auto_scroll = True
         self._thinking_indicator: ft.Control | None = None
@@ -120,6 +123,7 @@ class ChatArea(ft.Container):
             avatar_provider=self._avatar_provider,
             on_speak=self._on_speak,
             mute_state=self._mute_state,
+            tts_state=self._tts_state,
         )
         self._append_fade(bubble)
         self._scroll_if_auto(layout.SCROLL_DURATION_FAST)
@@ -151,6 +155,7 @@ class ChatArea(ft.Container):
                 avatar_provider=self._avatar_provider,
                 on_speak=self._on_speak,
                 mute_state=self._mute_state,
+                tts_state=self._tts_state,
             )
         )
         self._scroll_if_auto()
@@ -189,6 +194,7 @@ class ChatArea(ft.Container):
                             avatar_provider=self._avatar_provider,
                             on_speak=self._on_speak,
                             mute_state=self._mute_state,
+                            tts_state=self._tts_state,
                         )
                     )
         self._list.update()
@@ -243,12 +249,13 @@ class ChatArea(ft.Container):
 
     @staticmethod
     def _unsubscribe_mute(controls) -> None:
-        """对列表中的气泡退订 MuteState（气泡工厂把订阅句柄挂在控件上）。"""
+        """对列表中的气泡退订 MuteState / TTSStatusState（订阅句柄挂在控件上）。"""
         for ctrl in controls:
-            state = getattr(ctrl, "_mute_state", None)
-            cb = getattr(ctrl, "_mute_cb", None)
-            if state is not None and cb is not None:
-                state.unsubscribe(cb)
+            for state_attr, cb_attr in (("_mute_state", "_mute_cb"), ("_tts_state", "_tts_cb")):
+                state = getattr(ctrl, state_attr, None)
+                cb = getattr(ctrl, cb_attr, None)
+                if state is not None and cb is not None:
+                    state.unsubscribe(cb)
 
     def _on_scroll(self, e: ft.OnScrollEvent) -> None:
         if e.max_scroll_extent is None:

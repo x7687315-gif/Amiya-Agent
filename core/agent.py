@@ -54,6 +54,7 @@ class Agent:
         extract_auto: bool = False,
         default_extract_window: int = 10,
         manual_extract_window: int = 20,
+        on_reply_complete: Optional[Callable[[str], None]] = None,
     ) -> None:
         """
         memory: 记忆中间层。为 None 时行为与 Phase 1 完全一致（纯内存、不落盘），
@@ -69,6 +70,9 @@ class Agent:
         extract_auto: 是否每轮自动抽取候选。默认 False——钩子存在但 dormant，
                      零 LLM 调用、零候选写入；手动整理不受影响。
         default_extract_window / manual_extract_window: 自动 / 手动抽取的上下文轮数。
+        on_reply_complete: 回复完成事件（含被停止后的部分回复）——只做通知，
+                     不管 TTS（语音由 UI 层 🔊 触发，此边界已冻结）。可用于
+                     日志 / 摘要 / 未来的插件钩子；回调异常只记日志不影响主流程。
         """
         self.persona = persona
         self.llm = llm
@@ -90,8 +94,15 @@ class Agent:
         self._manual_extract_window = manual_extract_window
         self._history: List[Dict[str, str]] = []  # 短期窗口（喂给 LLM 的上下文）
         self.memory_degraded = False  # 记忆写入是否发生过失败（UI 可据此提示）
+        self._on_reply_complete = on_reply_complete
+        self._stop_requested = False  # 停止生成请求（UI 停止按钮置位）
         if memory is not None and restore_history:
             self._restore_history()
+
+    # ----- 停止生成 -----
+    def request_stop(self) -> None:
+        """请求停止当前流式回复。已生成的部分会照常落库并入短期窗口。"""
+        self._stop_requested = True
 
     # ----- 记忆闭环 -----
     def _restore_history(self) -> None:
@@ -249,6 +260,11 @@ class Agent:
         for delta in self.llm.stream_chat(system_prompt, window):
             full += delta
             yield delta
+            if self._stop_requested:
+                # UI 停止生成：跳出流（底层连接随生成器关闭而释放），
+                # 已收到的部分文本走正常收尾（落库 + 入窗口），不丢内容
+                break
+        self._stop_requested = False  # 消费掉标志，下一轮回复不受影响
         if full.strip():
             self._history.append({"role": "assistant", "content": full})
             self._remember("assistant", full)
@@ -256,6 +272,12 @@ class Agent:
             self._trim_history()
             # 记忆抽取钩子：EXTRACT_AUTO=False 时直接返回（零副作用），True 时才触发
             self._maybe_extract()
+        # 回复完成事件（完整或停止后的部分回复）：只通知，不管 TTS（边界冻结）
+        if full.strip() and self._on_reply_complete is not None:
+            try:
+                self._on_reply_complete(full)
+            except Exception as e:  # noqa: BLE001 - 钩子异常不影响主流程
+                log.warning("on_reply_complete 回调异常：%s", e)
 
     def reset(self) -> None:
         """开启新会话：清空短期窗口并轮换 session_id，**绝不删库**。"""
