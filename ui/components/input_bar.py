@@ -74,7 +74,8 @@ class InputBar(ft.Container):
         self.animate_opacity = ft.Animation(anim.NORMAL, anim.EASE_OUT)
 
     def _build(self) -> None:
-        self.bgcolor = c.SURFACE
+        # 透明化：壁纸为全局统一底色，输入框本体仍是浅色圆角卡片
+        self.bgcolor = None
         self.padding = ft.Padding.only(left=sp.LG, right=sp.LG, top=sp.SM, bottom=12)
         self.border = ft.Border.only(top=ft.BorderSide(width=1, color=c.BORDER))
         self.content = ft.Column(

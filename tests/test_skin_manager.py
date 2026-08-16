@@ -308,3 +308,73 @@ def test_bootstrap_context_carries_skins_for_drawer(tmp_path):
     ctx = m.bootstrap("starry", apply=False)
     ids = {s.id for s in ctx.skins}
     assert {"starry", "sakura", "sunset"} <= ids
+
+
+# ---------------------------------------------------------------------------
+# 统一底色契约 + 左下角显式切肤入口（2026-08-17 用户需求）
+# ---------------------------------------------------------------------------
+
+
+def test_unified_wallpaper_background_contract():
+    """主界面面板一律透明（bgcolor=None）：壁纸+遮罩是全局统一底色。
+
+    用户明确要求：左右上下的底色与聊天框一致，不留漏图的空隙。
+    该契约冻结此设计——新增面板若需要底色，应做成内容卡片而非整栏底色。
+    """
+    from ui.components.chat_area import ChatArea
+    from ui.components.date_nav import DateNav
+    from ui.components.header import Header
+    from ui.components.input_bar import InputBar
+    from ui.components.persona_status import PersonaStatusPanel
+
+    class _P:
+        name = "助手"
+        title = "本地"
+        identity: dict = {}
+        address = None
+
+    assert ChatArea(_P).bgcolor is None
+    assert DateNav(on_day_change=lambda _d: None, today="2026-08-17").bgcolor is None
+    assert Header(_P).bgcolor is None
+    assert InputBar(on_send=lambda _t: None).bgcolor is None
+    assert PersonaStatusPanel(_P).bgcolor is None
+
+
+def test_status_panel_skin_entry_visible_and_interactive(tmp_path):
+    """左下角「更换皮肤」入口：注入 skins 即出现，可展开、可选肤、可切跟随情绪。"""
+    from ui.components.persona_status import PersonaStatusPanel
+
+    picked = []
+    panel = PersonaStatusPanel(
+        _DrawerPersona(),
+        skins=[_fake_skin("starry", "星夜"), _fake_skin("sakura", "春樱")],
+        ui_skin="auto",
+        current_skin_id="starry",
+        on_skin_selected=picked.append,
+    )
+    assert panel._skin_toggle_btn is not None  # 显式入口存在
+    assert panel._skin_panel is not None and panel._skin_panel.visible is False  # 默认收起
+
+    panel._toggle_skin_panel()  # 展开
+    assert panel._skin_panel.visible is True
+    panel._toggle_skin_panel()  # 再点收起
+    assert panel._skin_panel.visible is False
+
+    panel._handle_skin_click("sakura")
+    assert picked == ["sakura"]
+    assert panel._auto_switch.value is False
+    assert "重启后生效" in (panel._skin_status.value or "")
+
+    panel._handle_auto_toggle(_ToggleEvent(True))
+    assert picked[-1] == "auto"
+    panel._handle_auto_toggle(_ToggleEvent(False))
+    assert picked[-1] == "starry"  # 关闭跟随 = 锁定当前
+
+
+def test_status_panel_without_skins_keeps_old_behavior():
+    """未注入 skins：无入口（旧测试/旧调用方零影响）。"""
+    from ui.components.persona_status import PersonaStatusPanel
+
+    panel = PersonaStatusPanel(_DrawerPersona())
+    assert panel._skin_toggle_btn is None
+    assert panel._skin_panel is None

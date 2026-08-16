@@ -70,7 +70,8 @@ class MemoryPanel(ft.Container):
     # ----- 布局 -----
     def _build(self) -> None:
         self.width = layout.RIGHT_COL_WIDTH
-        self.bgcolor = c.SURFACE
+        # 透明化：壁纸为全局统一底色，只保留描边分隔
+        self.bgcolor = None
         self.border = ft.Border.only(left=ft.BorderSide(width=1, color=c.BORDER))
         self.padding = ft.Padding.only(left=sp.LG, right=sp.LG, top=sp.LG, bottom=sp.LG)
 

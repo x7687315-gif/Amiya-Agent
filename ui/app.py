@@ -340,7 +340,14 @@ class AssistantApp:
             on_voice_change=self._on_voice_change,
             show_voice_controls=self._tts_enabled,
         )
-        self.persona_status = PersonaStatusPanel(persona, avatar_provider=self.avatar_provider)
+        self.persona_status = PersonaStatusPanel(
+            persona,
+            avatar_provider=self.avatar_provider,
+            skins=list(self._skin_ctx.skins) if self._skin_ctx else None,
+            ui_skin=getattr(self._settings, "ui_skin", "auto") if self._settings else "auto",
+            current_skin_id=self._skin_ctx.skin.id if self._skin_ctx else "starry",
+            on_skin_selected=self._on_skin_selected,
+        )
         self.chat_area = ChatArea(
             persona,
             avatar_provider=self.avatar_provider,

@@ -2,25 +2,47 @@
 
 展示助手的在场证据：头像与身份、当前情绪状态、信赖度、今日陪伴时长、最近记忆。
 v2 数据为占位/规则启发式，结构先行；后续接 PersonaRuntime / Memory 层即替换数据源。
+
+左下角「更换皮肤」入口（用户要求：显式可见，不放抽屉）：点击展开皮肤缩略图
+网格 + 跟随情绪开关；选中写配置、重启生效（运行时换肤仍是 Phase 4 边界）。
 """
 from __future__ import annotations
 
-from typing import List
+from typing import Callable, Dict, List, Optional
 
 import flet as ft
 
 from ui.theme import c, t, sp, r, layout, anim, EMOTIONS, DEFAULT_EMOTION
 from ui.components.avatar import make_avatar
 from ui.design.avatar_provider import AvatarProvider
+from ui.design.skin import Skin
 
 
 class PersonaStatusPanel(ft.Container):
     """左侧角色状态栏。"""
 
-    def __init__(self, persona, avatar_provider: AvatarProvider | None = None) -> None:
+    def __init__(
+        self,
+        persona,
+        avatar_provider: AvatarProvider | None = None,
+        skins: Optional[List[Skin]] = None,
+        ui_skin: str = "auto",
+        current_skin_id: str = "starry",
+        on_skin_selected: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """skins 注入时左下角显示「更换皮肤」入口；否则完全兼容旧行为。"""
         super().__init__()
         self.persona = persona
         self._avatar_provider = avatar_provider
+        self._skins = list(skins) if skins else []
+        self._ui_skin = ui_skin or "auto"
+        self._current_skin_id = current_skin_id
+        self._on_skin_selected = on_skin_selected
+        self._skin_toggle_btn: Optional[ft.Control] = None
+        self._skin_panel: Optional[ft.Control] = None
+        self._skin_status: Optional[ft.Text] = None
+        self._auto_switch: Optional[ft.Switch] = None
+        self._thumb_by_id: Dict[str, ft.Container] = {}
         self._state_key = DEFAULT_EMOTION
         self._trust = 70  # 占位信赖度（Phase 2 接 PersonaRuntime）
         self._companionship_minutes = 0
@@ -47,7 +69,8 @@ class PersonaStatusPanel(ft.Container):
 
     def _build(self) -> None:
         self.width = layout.LEFT_COL_WIDTH
-        self.bgcolor = c.SURFACE
+        # 透明化：壁纸为全局统一底色，内容卡片自带浅底保证可读
+        self.bgcolor = None
         self.border = ft.Border.only(right=ft.BorderSide(width=1, color=c.BORDER))
         self.padding = ft.Padding.only(left=sp.LG, right=sp.LG, top=sp.LG, bottom=sp.LG)
 
@@ -67,14 +90,37 @@ class PersonaStatusPanel(ft.Container):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
+        column_items = [
+            identity,
+            self._section_state(),
+            self._section_trust(),
+            self._section_companionship(),
+            self._section_recent(),
+        ]
+        if self._skins:
+            # 左下角显式切肤入口（默认收起，点击展开网格）
+            self._skin_toggle_btn = ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.PALETTE_ROUNDED, size=16, color=c.PRIMARY),
+                        ft.Text("更换皮肤", color=c.PRIMARY, size=t.CAPTION, weight=ft.FontWeight.W_500),
+                    ],
+                    spacing=sp.SM,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                ),
+                bgcolor=c.PRIMARY_SOFT,
+                border=ft.Border.all(width=1, color=c.BORDER),
+                border_radius=r.MD,
+                padding=ft.Padding.only(left=sp.MD, right=sp.MD, top=sp.SM + 2, bottom=sp.SM + 2),
+                tooltip="选择外观皮肤（重启后生效）",
+                on_click=lambda _e: self._toggle_skin_panel(),
+            )
+            self._skin_panel = self._build_skin_panel()
+            column_items += [ft.Container(expand=True), self._skin_toggle_btn, self._skin_panel]
+
         self.content = ft.Column(
-            [
-                identity,
-                self._section_state(),
-                self._section_trust(),
-                self._section_companionship(),
-                self._section_recent(),
-            ],
+            column_items,
             spacing=sp.LG,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
@@ -144,13 +190,115 @@ class PersonaStatusPanel(ft.Container):
             for item in self._recent
         ]
 
+    # ----- 左下角皮肤入口 -----
+    def _toggle_skin_panel(self) -> None:
+        """展开 / 收起皮肤网格。"""
+        if self._skin_panel is None:
+            return
+        self._skin_panel.visible = not self._skin_panel.visible
+        self._safe_update(self._skin_panel)
+
+    def _build_skin_panel(self) -> ft.Container:
+        """展开区：皮肤缩略图网格 + 跟随情绪开关 + 状态提示（默认收起）。"""
+        self._thumb_by_id = {}
+        for skin in self._skins:
+            selected = self._ui_skin not in ("", "auto") and skin.id == self._ui_skin
+            thumb = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Image(
+                            src=str(skin.avatar_path),
+                            width=52,
+                            height=52,
+                            fit=ft.BoxFit.COVER,
+                            border_radius=26,
+                        ),
+                        ft.Text(
+                            skin.name,
+                            size=t.TINY,
+                            color=c.TEXT_SECONDARY,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                    ],
+                    spacing=4,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                border=ft.Border.all(width=2, color=c.PRIMARY if selected else c.BORDER),
+                border_radius=r.MD,
+                padding=ft.Padding.only(left=4, right=4, top=6, bottom=4),
+                tooltip=skin.description or skin.name,
+                on_click=lambda _e, sid=skin.id: self._handle_skin_click(sid),
+            )
+            self._thumb_by_id[skin.id] = thumb
+
+        self._auto_switch = ft.Switch(
+            label="跟随情绪",
+            value=self._ui_skin == "auto",
+            active_color=c.PRIMARY,
+            on_change=self._handle_auto_toggle,
+        )
+        self._skin_status = ft.Text("", size=t.TINY, color=c.TEXT_MUTED)
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        list(self._thumb_by_id.values()),
+                        wrap=True,
+                        spacing=sp.SM,
+                        run_spacing=sp.SM,
+                    ),
+                    self._auto_switch,
+                    self._skin_status,
+                ],
+                spacing=sp.SM,
+                horizontal_alignment=ft.CrossAxisAlignment.START,
+            ),
+            bgcolor=c.SURFACE,
+            border=ft.Border.all(width=1, color=c.BORDER),
+            border_radius=r.MD,
+            padding=ft.Padding.only(left=sp.MD, right=sp.MD, top=sp.MD, bottom=sp.MD),
+            visible=False,
+        )
+
+    def _handle_skin_click(self, skin_id: str) -> None:
+        if self._on_skin_selected is not None:
+            self._on_skin_selected(skin_id)
+        if self._auto_switch is not None:
+            self._auto_switch.value = False
+            self._safe_update(self._auto_switch)
+        self._refresh_selection(skin_id)
+        self._set_skin_status(f"已选择，重启后生效。")
+
+    def _handle_auto_toggle(self, e: ft.ControlEvent) -> None:
+        follow = bool(getattr(getattr(e, "control", None), "value", False))
+        skin_id = "auto" if follow else self._current_skin_id
+        if self._on_skin_selected is not None:
+            self._on_skin_selected(skin_id)
+        self._refresh_selection("auto" if follow else self._current_skin_id)
+        self._set_skin_status(
+            "跟随情绪（重启后生效）。" if follow else "已锁定当前皮肤（重启后生效）。"
+        )
+
+    def _refresh_selection(self, selected_id: str) -> None:
+        for sid, thumb in self._thumb_by_id.items():
+            thumb.border = ft.Border.all(
+                width=2, color=c.PRIMARY if sid == selected_id else c.BORDER
+            )
+            self._safe_update(thumb)
+
+    def _set_skin_status(self, message: str) -> None:
+        if self._skin_status is not None:
+            self._skin_status.value = message
+            self._safe_update(self._skin_status)
+
     # —— 对外更新接口（后续接真实数据源）——
     @staticmethod
     def _safe_update(ctrl: ft.Control) -> None:
         """控件未挂载到 page 时 update() 会抛 RuntimeError，安全忽略。"""
         try:
             ctrl.update()
-        except RuntimeError:
+        except Exception:  # noqa: BLE001 - 离线/未挂载场景统一忽略
             pass
 
     def set_state(self, state_key: str) -> None:

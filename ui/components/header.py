@@ -127,7 +127,8 @@ class Header(ft.Container):
         self._mute_btn.update()
 
     def _build(self) -> None:
-        self.bgcolor = c.SURFACE
+        # 透明化：壁纸为全局统一底色，顶栏只保留底部描边做分隔
+        self.bgcolor = None
         self.padding = ft.Padding.only(
             left=sp.LG, right=sp.LG, top=layout.HEADER_PAD_Y, bottom=layout.HEADER_PAD_Y
         )
