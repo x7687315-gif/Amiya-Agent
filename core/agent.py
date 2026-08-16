@@ -21,6 +21,7 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional
 
+from . import emotion as _emotion
 from .llm_client import LLMClient
 from .persona import Persona, PersonaManager
 from .prompt_builder import PromptBuilder
@@ -237,7 +238,11 @@ class Agent:
             if khits:
                 knowledge_block = self._knowledge.render_block(khits)
 
-        # 人格先于上下文：身份 → 当前时间 → 核心价值观 → 知识 → 记忆 → 关系 → 情绪 seam → 行为 → 语言
+        # Emotion 支柱（规则判定当前情绪）：基于用户本轮的话判定助手的即时情绪，
+        # 注入【当前情绪】块（位于【与用户的关系】之后、行为准则之前，沿用既有 seam）。
+        current_emotion = _emotion.detect_emotion(user_text)
+
+        # 人格先于上下文：身份 → 当前时间 → 核心价值观 → 知识 → 记忆 → 关系 → 情绪 → 行为 → 语言
         relationship_block = self._persona_manager.relationship_block()
         behavior_block = self._persona_manager.behavior_block()
         system_prompt = self.prompt_builder.build_system(
@@ -245,7 +250,7 @@ class Agent:
             knowledge_block=knowledge_block,
             relationship_block=relationship_block,
             behavior_block=behavior_block,
-            emotion_block=None,  # Emotion seam（本轮不接入真实模型）
+            emotion_block=_emotion.emotion_block(current_emotion),
             now=datetime.now(),  # 本机实时时钟：今天几号/几点，时间话题不再靠猜
         )
 
@@ -272,12 +277,28 @@ class Agent:
             self._trim_history()
             # 记忆抽取钩子：EXTRACT_AUTO=False 时直接返回（零副作用），True 时才触发
             self._maybe_extract()
+            # 情绪状态持久化：写入 persona_state.emotion（系统状态表，与用户记忆分表）。
+            # 供皮肤系统/左栏状态读取；不写 memory 表，三层隔离不破。
+            self._persist_emotion(current_emotion)
         # 回复完成事件（完整或停止后的部分回复）：只通知，不管 TTS（边界冻结）
         if full.strip() and self._on_reply_complete is not None:
             try:
                 self._on_reply_complete(full)
             except Exception as e:  # noqa: BLE001 - 钩子异常不影响主流程
                 log.warning("on_reply_complete 回调异常：%s", e)
+
+    def _persist_emotion(self, emotion_key: str) -> None:
+        """把当前情绪写入 persona_state.emotion（系统状态表，与用户记忆分表）。
+
+        经 MemoryManager.save_state（_STATE_FIELDS 白名单含 emotion），不碰 memory 表；
+        失败只降级不打断对话。memory=None（纯内存模式）时静默跳过。
+        """
+        if self._memory is None:
+            return
+        try:
+            self._memory.save_state(emotion=emotion_key)
+        except Exception as e:  # noqa: BLE001 - 状态写入失败不阻断对话
+            log.warning("情绪状态持久化失败（已忽略）：%s", e)
 
     def reset(self) -> None:
         """开启新会话：清空短期窗口并轮换 session_id，**绝不删库**。"""

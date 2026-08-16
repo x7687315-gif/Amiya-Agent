@@ -17,6 +17,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -80,6 +81,21 @@ def _build_colors(overrides: Mapping[str, str]) -> Colors:
         k: v for k, v in overrides.items() if k in Colors.__dataclass_fields__
     }
     return replace(Colors(), **valid)
+
+
+def _parse_iso_ts(value) -> Optional[float]:
+    """把 persona_state.last_seen_at（ISO 文本）解析为 unix 时间戳；失败/缺失返回 None。
+
+    兼容已是数字的情况（便于测试与防御）。
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (ValueError, TypeError):
+        return None
 
 
 def _fallback_skin() -> Skin:
@@ -185,8 +201,10 @@ class SkinManager:
         emotion = None
         emotion_ts = None
         if agent_state:
-            emotion = agent_state.get("last_emotion")  # type: ignore[assignment]
-            emotion_ts = agent_state.get("last_emotion_at")  # type: ignore[assignment]
+            # persona_state 的真实键：emotion（当前情绪标签）+ last_seen_at（最近交互时间，
+            # ISO 文本）。情绪的"年龄"用最近交互时间衡量——长时间没用 → 过期 → calm→starry。
+            emotion = agent_state.get("emotion")  # type: ignore[assignment]
+            emotion_ts = _parse_iso_ts(agent_state.get("last_seen_at"))
         skin = self.resolve(ui_skin, emotion=emotion, emotion_ts=emotion_ts, now=now)
         if apply:
             # 一次性写入单例 c——必须在构造任何 UI 之前（计划 §4 / §7）。

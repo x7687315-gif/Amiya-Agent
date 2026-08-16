@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 
 import flet as ft
@@ -154,19 +155,25 @@ def test_bootstrap_reads_agent_emotion_with_expiry(tmp_path):
     class S:
         ui_skin = "auto"
 
-    # 新鲜 worried → pale
+    # 新鲜 worried（last_seen_at 为 ISO 文本，1 分钟前）→ pale
     fresh = bootstrap_skin(
         S(),
-        agent_state={"last_emotion": "worried", "last_emotion_at": now - 100},
+        agent_state={
+            "emotion": "worried",
+            "last_seen_at": datetime.fromtimestamp(now - 100).isoformat(),
+        },
         skins_folder=tmp_path,
         now=now,
         apply=False,
     )
     assert fresh.skin.id == "pale"
-    # 过期 worried → starry
+    # 过期 worried（2 天前）→ starry
     stale = bootstrap_skin(
         S(),
-        agent_state={"last_emotion": "worried", "last_emotion_at": now - 2 * 86400},
+        agent_state={
+            "emotion": "worried",
+            "last_seen_at": datetime.fromtimestamp(now - 2 * 86400).isoformat(),
+        },
         skins_folder=tmp_path,
         now=now,
         apply=False,
