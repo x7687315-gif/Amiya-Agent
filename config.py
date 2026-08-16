@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -87,3 +88,26 @@ def load_settings() -> Settings:
         tts_enabled=_env_bool("TTS_ENABLED", True),
         ui_skin=(os.getenv("UI_SKIN") or "auto").strip(),
     )
+
+
+def persist_ui_skin(skin_id: str, env_path: "os.PathLike | str | None" = None) -> None:
+    """把 ``UI_SKIN=<skin_id>`` 写回 .env（不存在则创建），供皮肤手动选择持久化。
+
+    皮肤计划 Phase 2：PersonaDrawer「外观」区块选中后调用，**重启后生效**
+    （运行时换肤是 Phase 4 边界，不在本函数预支）。只改 UI_SKIN 这一行，
+    其余配置原样保留。env_path 供测试注入，生产默认写项目根 .env。
+    """
+    path = Path(env_path) if env_path else Path(__file__).resolve().parent / ".env"
+    skin_id = (skin_id or "auto").strip()
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    out: list[str] = []
+    replaced = False
+    for line in lines:
+        if line.strip().startswith("UI_SKIN="):
+            out.append(f"UI_SKIN={skin_id}")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        out.append(f"UI_SKIN={skin_id}")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")

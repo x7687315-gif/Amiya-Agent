@@ -73,6 +73,7 @@ class SkinContext:
     avatar_provider: AvatarProvider
     background_path: Path
     scrim_opacity: float
+    skins: tuple = ()  # 全部已加载皮肤（供 PersonaDrawer「外观」区块做缩略图）
 
 
 def _build_colors(overrides: Mapping[str, str]) -> Colors:
@@ -220,6 +221,7 @@ class SkinManager:
             avatar_provider=avatar_provider,
             background_path=skin.background_path,
             scrim_opacity=skin.scrim_opacity,
+            skins=tuple(self.registry.values()),
         )
 
 

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import flet as ft  # noqa: E402
 
-from config import ConfigError, load_settings  # noqa: E402
+from config import ConfigError, load_settings, persist_ui_skin  # noqa: E402
 from core.agent import Agent  # noqa: E402
 from core.llm_client import DeepSeekLLMClient  # noqa: E402
 from core.memory import (  # noqa: E402
@@ -317,7 +317,15 @@ class AssistantApp:
         assert self.page is not None
 
         # 右侧人格抽屉（点击 Header 人名展开）
-        self.drawer = PersonaDrawer(persona, avatar_provider=self.avatar_provider)
+        # 右侧人格抽屉（点击 Header 人名展开）。皮肤计划 Phase 2：附「外观」区块。
+        self.drawer = PersonaDrawer(
+            persona,
+            avatar_provider=self.avatar_provider,
+            skins=list(self._skin_ctx.skins) if self._skin_ctx else None,
+            ui_skin=getattr(self._settings, "ui_skin", "auto") if self._settings else "auto",
+            current_skin_id=self._skin_ctx.skin.id if self._skin_ctx else "starry",
+            on_skin_selected=self._on_skin_selected,
+        )
         self.page.end_drawer = self.drawer
 
         # 三栏组件
@@ -379,7 +387,8 @@ class AssistantApp:
         bg_path = self._skin_ctx.background_path if self._skin_ctx else None
         if bg_path and os.path.isfile(str(bg_path)):
             bg_layers.append(
-                ft.Image(src=str(bg_path), fit=ft.ImageFit.COVER, expand=True)
+                # Flet 0.86.5 的适配枚举叫 BoxFit（无 ft.ImageFit，用错启动即崩）
+                ft.Image(src=str(bg_path), fit=ft.BoxFit.COVER, expand=True)
             )
             bg_layers.append(
                 ft.Container(
@@ -525,6 +534,18 @@ class AssistantApp:
                 )
         finally:
             self.tts_state.set_busy(False)
+
+    def _on_skin_selected(self, skin_id: str) -> None:
+        """手动选肤：持久化到 .env（UI_SKIN），重启后生效。
+
+        皮肤计划冻结边界：运行时不换肤（Phase 4 再议）；本回调只写配置，
+        界面即时反馈（选中框 + 状态文案）由抽屉自己完成。
+        """
+        try:
+            persist_ui_skin(skin_id)
+            logger.info("皮肤选择已保存（重启后生效）：UI_SKIN=%s", skin_id)
+        except Exception:  # noqa: BLE001 - 保存失败不影响当前会话
+            logger.exception("保存皮肤选择失败（已忽略）")
 
     def _open_drawer(self) -> None:
         if self.drawer is not None and self.page is not None:

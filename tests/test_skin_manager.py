@@ -198,3 +198,113 @@ def test_real_phase1_skins_present():
         assert s.avatar_path.is_file(), sid
         assert s.background_path.is_file(), sid
         assert 0.0 < s.scrim_opacity <= 1.0, sid
+
+# ---------------------------------------------------------------------------
+# Phase 2 / Phase 3（2026-08-17 收尾）：磁盘 6 套皮肤 + 选肤持久化 + 抽屉外观区块
+# ---------------------------------------------------------------------------
+
+
+def test_real_skins_on_disk_six_total():
+    """Phase 3 验收：磁盘上 6 套皮肤全部可加载；sakura/sunset 仅手动可选。"""
+    m = SkinManager()
+    m.load_skins()  # 默认目录 resources/skins
+    ids = set(m.registry)
+    assert {"starry", "warm", "winter", "pale", "sakura", "sunset"} <= ids
+    assert m.registry["sakura"].is_manual_only is True
+    assert m.registry["sunset"].is_manual_only is True
+    # 情绪映射的 4 套不是 manual_only（auto 模式可达）
+    for sid in ("starry", "warm", "winter", "pale"):
+        assert m.registry[sid].is_manual_only is False
+
+
+def test_persist_ui_skin_replaces_existing_line(tmp_path):
+    from config import persist_ui_skin
+
+    env = tmp_path / ".env"
+    env.write_text("DEEPSEEK_API_KEY=x\nUI_SKIN=auto\nTIMEOUT=30\n", encoding="utf-8")
+    persist_ui_skin("sakura", env_path=env)
+    text = env.read_text(encoding="utf-8")
+    assert "UI_SKIN=sakura" in text
+    assert "UI_SKIN=auto" not in text
+    assert "DEEPSEEK_API_KEY=x" in text  # 其它行原样保留
+    assert "TIMEOUT=30" in text
+
+
+def test_persist_ui_skin_appends_when_missing(tmp_path):
+    from config import persist_ui_skin
+
+    env = tmp_path / ".env"
+    env.write_text("DEEPSEEK_API_KEY=x\n", encoding="utf-8")
+    persist_ui_skin("auto", env_path=env)
+    text = env.read_text(encoding="utf-8")
+    assert "UI_SKIN=auto" in text
+    assert text.startswith("DEEPSEEK_API_KEY=x")  # 追加不覆盖
+
+
+class _DrawerPersona:
+    identity: dict = {"perspective": ["温和"], "values": ["守护"], "thinking_style": []}
+    name = "助手"
+    title = "本地"
+
+
+def _fake_skin(sid: str, name: str) -> "Skin":
+    from ui.design.skin import Skin
+
+    return Skin(
+        id=sid,
+        name=name,
+        description="",
+        avatar_path=Path("x") / "a.png",
+        background_path=Path("x") / "b.jpg",
+        colors=Colors(),
+    )
+
+
+class _ToggleEvent:
+    def __init__(self, value: bool):
+        self.control = type("C", (), {"value": value})()
+
+
+def test_drawer_appearance_select_and_toggle():
+    from ui.components.persona_drawer import PersonaDrawer
+
+    picked = []
+    d = PersonaDrawer(
+        _DrawerPersona(),
+        skins=[_fake_skin("starry", "星夜"), _fake_skin("sakura", "春樱")],
+        ui_skin="auto",
+        current_skin_id="starry",
+        on_skin_selected=picked.append,
+    )
+    # 点击 sakura 缩略图 → 手动锁定
+    d._handle_skin_click("sakura")
+    assert picked == ["sakura"]
+    assert d._auto_switch.value is False  # 手动选择自动退出跟随情绪
+    assert "重启后生效" in (d._skin_status.value or "")
+    # 打开跟随情绪 → auto
+    d._handle_auto_toggle(_ToggleEvent(True))
+    assert picked[-1] == "auto"
+    # 关闭跟随情绪 → 锁定当前解析皮肤
+    d._handle_auto_toggle(_ToggleEvent(False))
+    assert picked[-1] == "starry"
+
+
+def test_drawer_without_skins_hides_appearance():
+    from ui.components.persona_drawer import PersonaDrawer
+
+    d = PersonaDrawer(_DrawerPersona())  # 未注入 skins
+    assert d._auto_switch is None
+    for ctrl in d.controls:
+        content = getattr(ctrl, "content", None)
+        if hasattr(content, "controls"):
+            for sub in content.controls:
+                assert getattr(sub, "value", None) != "外观"
+
+
+def test_bootstrap_context_carries_skins_for_drawer(tmp_path):
+    """SkinContext.skins 把注册表带给 PersonaDrawer（Phase 2 接线依赖）。"""
+    m = SkinManager()
+    m.load_skins()
+    ctx = m.bootstrap("starry", apply=False)
+    ids = {s.id for s in ctx.skins}
+    assert {"starry", "sakura", "sunset"} <= ids
