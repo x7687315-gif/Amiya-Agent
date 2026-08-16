@@ -471,3 +471,90 @@ def test_all_skins_have_dominant_color():
     for sid, skin in m.registry.items():
         assert skin.dominant_color and skin.dominant_color.startswith("#"), sid
         assert len(skin.dominant_color) == 7  # #RRGGBB
+
+
+# ---------------------------------------------------------------------------
+# 可调分栏（2026-08-17 用户需求：聊天框尺寸/位置手动调节）
+# ---------------------------------------------------------------------------
+
+
+def test_settings_layout_widths_from_env(monkeypatch):
+    from config import load_settings
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("UI_LEFT_WIDTH", "400")
+    monkeypatch.setenv("UI_RIGHT_WIDTH", "260")
+    s = load_settings()
+    assert s.ui_left_width == 400 and s.ui_right_width == 260
+    monkeypatch.delenv("UI_LEFT_WIDTH")
+    monkeypatch.delenv("UI_RIGHT_WIDTH")
+    s2 = load_settings()
+    assert s2.ui_left_width == 260 and s2.ui_right_width == 300
+
+
+def test_persist_ui_layout_replaces_and_appends(tmp_path):
+    from config import persist_ui_layout
+
+    env = tmp_path / ".env"
+    env.write_text("DEEPSEEK_API_KEY=x\nUI_LEFT_WIDTH=260\n", encoding="utf-8")
+    persist_ui_layout(410, 280, env_path=env)
+    text = env.read_text(encoding="utf-8")
+    assert "UI_LEFT_WIDTH=410" in text  # 替换
+    assert "UI_RIGHT_WIDTH=280" in text  # 追加
+    assert "DEEPSEEK_API_KEY=x" in text  # 其它行不动
+
+
+class _FakeEvent:
+    def __init__(self, delta: float):
+        self.primary_delta = delta
+
+
+def test_split_handle_forwards_delta_and_done():
+    from ui.components.split_handle import SplitHandle
+
+    deltas, dones = [], []
+    h = SplitHandle(on_resize=deltas.append, on_done=lambda: dones.append(1))
+    h._handle_update(_FakeEvent(12.5))
+    h._handle_update(_FakeEvent(-3))
+    assert deltas == [12.5, -3]
+    h._handle_done(None)
+    assert dones == [1]
+
+
+class _Panel:
+    def __init__(self):
+        self.width = 260
+        self.updated = 0
+
+    def update(self):
+        self.updated += 1
+
+
+def test_app_drag_left_right_clamping(monkeypatch):
+    from ui.app import AssistantApp
+
+    app = AssistantApp()
+    app.persona_status = _Panel()
+    app.memory_panel = _Panel()
+    app._left_width = 500
+    app._drag_left(200)  # 500+200 → 钳到 560
+    assert app._left_width == 560 and app.persona_status.width == 560
+    app._drag_left(-1000)  # 钳到下限 180
+    assert app._left_width == 180
+    app._right_width = 250
+    app._drag_right(-100)  # 向左拖 → 右栏加宽 350
+    assert app._right_width == 350 and app.memory_panel.width == 350
+    app._drag_right(9999)  # 钳到下限 220
+    assert app._right_width == 220
+
+
+def test_app_persist_layout_writes_env(monkeypatch):
+    import ui.app as app_mod
+    from ui.app import AssistantApp
+
+    saved = []
+    monkeypatch.setattr(app_mod, "persist_ui_layout", lambda l, r: saved.append((l, r)))
+    app = AssistantApp()
+    app._left_width, app._right_width = 410, 280
+    app._persist_layout()
+    assert saved == [(410, 280)]

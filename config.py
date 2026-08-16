@@ -53,6 +53,8 @@ class Settings:
     tts_text_lang: str  # 朗读文本语言（zh/en/…，与 /tts 契约一致）
     tts_enabled: bool  # 语音功能总开关（TTS_ENABLED）。0 = 彻底关闭朗读（🔊 隐藏、不合成），区别于会话级静音
     ui_skin: str  # UI 皮肤："auto" 走情绪联动；否则为具体皮肤 id（starry/warm/…）。单一字段，无 ui_skin_auto。
+    ui_left_width: int  # 左栏宽度（可拖拽调节，持久化；默认 260）
+    ui_right_width: int  # 右栏宽度（可拖拽调节，持久化；默认 300）
 
 
 def load_settings() -> Settings:
@@ -87,6 +89,8 @@ def load_settings() -> Settings:
         tts_text_lang=(os.getenv("TTS_TEXT_LANG") or "zh").strip(),
         tts_enabled=_env_bool("TTS_ENABLED", True),
         ui_skin=(os.getenv("UI_SKIN") or "auto").strip(),
+        ui_left_width=int(os.getenv("UI_LEFT_WIDTH") or "260"),
+        ui_right_width=int(os.getenv("UI_RIGHT_WIDTH") or "300"),
     )
 
 
@@ -111,3 +115,26 @@ def persist_ui_skin(skin_id: str, env_path: "os.PathLike | str | None" = None) -
     if not replaced:
         out.append(f"UI_SKIN={skin_id}")
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def persist_ui_layout(left_width: int, right_width: int, env_path: "os.PathLike | str | None" = None) -> None:
+    """把栏宽写回 .env（UI_LEFT_WIDTH / UI_RIGHT_WIDTH），其余配置原样保留。
+
+    拖拽分栏手柄松手时调用（2026-08-17 可调聊天区需求）。env_path 供测试注入。
+    """
+    path = Path(env_path) if env_path else Path(__file__).resolve().parent / ".env"
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    wanted = {"UI_LEFT_WIDTH": str(int(left_width)), "UI_RIGHT_WIDTH": str(int(right_width))}
+    out: list[str] = []
+    seen: set = set()
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in wanted:
+            out.append(f"{key}={wanted[key]}")
+            seen.add(key)
+        else:
+            out.append(line)
+    for key, value in wanted.items():
+        if key not in seen:
+            out.append(f"{key}={value}")
+    path.write_text(chr(10).join(out) + chr(10), encoding="utf-8")

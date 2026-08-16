@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import flet as ft  # noqa: E402
 
-from config import ConfigError, load_settings, persist_ui_skin  # noqa: E402
+from config import ConfigError, load_settings, persist_ui_layout, persist_ui_skin  # noqa: E402
 from core.agent import Agent  # noqa: E402
 from core.llm_client import DeepSeekLLMClient  # noqa: E402
 from core.memory import (  # noqa: E402
@@ -45,6 +45,7 @@ from ui.components.memory_panel import MemoryPanel  # noqa: E402
 from ui.components.persona_drawer import PersonaDrawer  # noqa: E402
 from ui.components.persona_status import PersonaStatusPanel  # noqa: E402
 from ui.components.speaker import MuteState  # noqa: E402
+from ui.components.split_handle import SplitHandle  # noqa: E402
 from ui.components.tts_status import TTSStatusBanner, TTSStatusState  # noqa: E402
 from ui.design.avatar_provider import AvatarProvider  # noqa: E402
 from ui.design.skin import SkinContext, bootstrap_skin  # noqa: E402
@@ -61,6 +62,9 @@ class AssistantApp:
         self.avatar_provider: "AvatarProvider | None" = None
         self._persona = None  # run() 后有值；运行时换肤重建用
         self._rebuilding = False  # 运行时换肤重建中（防重入）
+        # 可调分栏（用户需求：聊天框尺寸/位置手动调节）
+        self._left_width = 260
+        self._right_width = 300
         self._skin_ctx: "SkinContext | None" = None
         self.header: Header | None = None
         self.persona_status: PersonaStatusPanel | None = None
@@ -199,6 +203,9 @@ class AssistantApp:
         self._tts_voice = settings.tts_voice
         self._tts_lang = settings.tts_text_lang
         self._settings = settings
+        # 可调分栏：从配置恢复（越界值钳回合法区间）
+        self._left_width = max(180, min(560, int(settings.ui_left_width)))
+        self._right_width = max(220, min(620, int(settings.ui_right_width)))
         # 静音即刻停掉正在播/排队的语音（用户预期：按下静音，世界安静）
         self.mute_state.subscribe(
             lambda muted: self.player.stop_all() if muted else None
@@ -368,10 +375,19 @@ class AssistantApp:
             spacing=0,
         )
 
+        # 可调分栏：应用持久化宽度（面板默认值仅兜底）
+        self.persona_status.width = self._left_width
+        self.memory_panel.width = self._right_width
         body = ft.Row(
-            [self.persona_status, self.middle, self.memory_panel],
+            [
+                self.persona_status,
+                SplitHandle(on_resize=self._drag_left, on_done=self._persist_layout),
+                self.middle,
+                SplitHandle(on_resize=self._drag_right, on_done=self._persist_layout),
+                self.memory_panel,
+            ],
             expand=True,
-            spacing=layout.COLUMN_GAP,
+            spacing=0,
             vertical_alignment=ft.CrossAxisAlignment.STRETCH,
         )
 
@@ -519,6 +535,38 @@ class AssistantApp:
                 )
         finally:
             self.tts_state.set_busy(False)
+
+    # ----- 可调分栏（聊天区尺寸/位置手动调节） -----
+    LEFT_MIN, LEFT_MAX = 180, 560
+    RIGHT_MIN, RIGHT_MAX = 220, 620
+
+    def _drag_left(self, delta: float) -> None:
+        """左栏手柄：向右拖加宽左栏（聊天区右移给壁纸人物让位）。"""
+        self._left_width = max(self.LEFT_MIN, min(self.LEFT_MAX, self._left_width + delta))
+        if self.persona_status is not None:
+            self.persona_status.width = int(self._left_width)
+            self._safe_ctrl_update(self.persona_status)
+
+    def _drag_right(self, delta: float) -> None:
+        """右栏手柄：向右拖收窄右栏（聊天区变宽）。"""
+        self._right_width = max(self.RIGHT_MIN, min(self.RIGHT_MAX, self._right_width - delta))
+        if self.memory_panel is not None:
+            self.memory_panel.width = int(self._right_width)
+            self._safe_ctrl_update(self.memory_panel)
+
+    def _persist_layout(self) -> None:
+        """拖完持久化栏宽（下次启动保持）。"""
+        try:
+            persist_ui_layout(int(self._left_width), int(self._right_width))
+        except Exception:  # noqa: BLE001 - 持久化失败不影响当前会话
+            logger.exception("保存栏宽失败（已忽略）")
+
+    @staticmethod
+    def _safe_ctrl_update(ctrl) -> None:
+        try:
+            ctrl.update()
+        except Exception:  # noqa: BLE001 - 离线/未挂载场景
+            pass
 
     def _on_skin_selected(self, skin_id: str) -> None:
         """手动选肤：持久化到 .env 并**立即生效**（整体重建 UI）。
