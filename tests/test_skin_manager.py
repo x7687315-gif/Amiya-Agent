@@ -280,7 +280,7 @@ def test_drawer_appearance_select_and_toggle():
     d._handle_skin_click("sakura")
     assert picked == ["sakura"]
     assert d._auto_switch.value is False  # 手动选择自动退出跟随情绪
-    assert "重启后生效" in (d._skin_status.value or "")
+    assert "已切换" in (d._skin_status.value or "")
     # 打开跟随情绪 → auto
     d._handle_auto_toggle(_ToggleEvent(True))
     assert picked[-1] == "auto"
@@ -363,7 +363,7 @@ def test_status_panel_skin_entry_visible_and_interactive(tmp_path):
     panel._handle_skin_click("sakura")
     assert picked == ["sakura"]
     assert panel._auto_switch.value is False
-    assert "重启后生效" in (panel._skin_status.value or "")
+    assert "已切换" in (panel._skin_status.value or "")
 
     panel._handle_auto_toggle(_ToggleEvent(True))
     assert picked[-1] == "auto"
@@ -378,3 +378,86 @@ def test_status_panel_without_skins_keeps_old_behavior():
     panel = PersonaStatusPanel(_DrawerPersona())
     assert panel._skin_toggle_btn is None
     assert panel._skin_panel is None
+
+
+# ---------------------------------------------------------------------------
+# 即时换肤（2026-08-17 用户要求：点击立即生效）+ 玻璃输入框
+# ---------------------------------------------------------------------------
+
+
+def test_input_field_uses_glass_background():
+    """底部输入框用半透明玻璃底（透出壁纸），不再形成白色横条。"""
+    from ui.components.input_bar import InputBar
+
+    bar = InputBar(on_send=lambda _t: None)
+    assert bar._field.bgcolor == c.SURFACE_GLASS
+    assert c.SURFACE_GLASS.endswith("F5F7FC") and len(c.SURFACE_GLASS) == 9  # #AARRGGBB
+
+
+def test_on_skin_selected_persists_and_rebuilds(monkeypatch):
+    """选肤回调：写 .env + 触发运行时重建（AssistantApp 级，注入替身）。"""
+    import ui.app as app_mod
+    from ui.app import AssistantApp
+
+    saved = []
+    rebuilt = []
+    monkeypatch.setattr(app_mod, "persist_ui_skin", lambda sid: saved.append(sid))
+    app = AssistantApp()
+    app.input_bar = None  # 非 loading
+    app._apply_skin_runtime = lambda: rebuilt.append(True)
+    app._on_skin_selected("sakura")
+    assert saved == ["sakura"]
+    assert rebuilt == [True]
+
+
+def test_on_skin_selected_skips_rebuild_while_generating(monkeypatch):
+    """正在生成回复时只保存、不重建（流式 worker 持有旧控件）。"""
+    import ui.app as app_mod
+    from ui.app import AssistantApp
+
+    saved = []
+    rebuilt = []
+    monkeypatch.setattr(app_mod, "persist_ui_skin", lambda sid: saved.append(sid))
+    app = AssistantApp()
+
+    class _BusyBar:
+        _is_loading = True
+
+    app.input_bar = _BusyBar()
+    app._apply_skin_runtime = lambda: rebuilt.append(True)
+    app._on_skin_selected("warm")
+    assert saved == ["warm"]
+    assert rebuilt == []  # 生成中：只保存不重建
+
+
+def test_apply_skin_runtime_requires_page_and_persona():
+    from ui.app import AssistantApp
+
+    app = AssistantApp()  # page/persona 均为 None
+    app._apply_skin_runtime()  # 应静默返回，不抛异常
+    assert app._rebuilding is False  # 未调度不置位
+
+
+def test_apply_skin_runtime_defers_to_event_loop():
+    """重建必须延迟到事件循环（同步 page.clean 会话会被回收——实测 bug）。"""
+    from ui.app import AssistantApp
+
+    scheduled = []
+
+    class _FakePage:
+        def run_task(self, coro_fn, *a):
+            scheduled.append(coro_fn)
+
+    app = AssistantApp()
+    app.page = _FakePage()
+    app._persona = object()
+    app._apply_skin_runtime()
+    assert app._rebuilding is True  # 已置位（防重入）
+    assert len(scheduled) == 1  # 只调度，不同步重建
+    app._apply_skin_runtime()  # 重建中再点：被防重入挡掉
+    assert len(scheduled) == 1
+    # 手动跑协程验证可完成（page 为 fake，build 流程会走异常兜底分支但不抛）
+    import asyncio
+
+    asyncio.run(scheduled[0]())
+    assert app._rebuilding is False  # 完成后复位

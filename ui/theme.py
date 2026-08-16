@@ -29,6 +29,7 @@ class Colors:
     BG: str = "#FAFAFC"  # 页面背景
     SURFACE: str = "#FFFFFF"  # 卡片、Header、Input Bar
     SURFACE_SECONDARY: str = "#F2F2F6"  # 输入框、禁用态、标签
+    SURFACE_GLASS: str = "#C8F5F7FC"  # 半透明白玻璃（输入框等需要透出壁纸的浅底，78% 白）
 
     BORDER: str = "#E8E8EF"  # 描边、分隔线
     BORDER_STRONG: str = "#D8D8E3"  # 较强描边

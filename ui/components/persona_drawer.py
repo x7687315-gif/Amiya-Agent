@@ -195,7 +195,7 @@ class PersonaDrawer(ft.NavigationDrawer):
                     ),
                     self._auto_switch,
                     ft.Text(
-                        "选择后重启生效；跟随情绪时按助手近 24 小时的状态自动挑选。",
+                        "点击即切换；跟随情绪时按助手近 24 小时的状态自动挑选。",
                         size=t.TINY,
                         color=c.TEXT_MUTED,
                     ),
@@ -214,7 +214,7 @@ class PersonaDrawer(ft.NavigationDrawer):
             self._auto_switch.value = False
             self._try_update(self._auto_switch)
         self._refresh_selection(skin_id)
-        self._set_skin_status(f"已选择「{self._skin_name(skin_id)}」，重启后生效。")
+        self._set_skin_status(f"已切换为「{self._skin_name(skin_id)}」。")
 
     def _handle_auto_toggle(self, e: ft.ControlEvent) -> None:
         """跟随情绪开关：开 = auto；关 = 锁定本次启动解析出的当前皮肤。"""
@@ -224,9 +224,9 @@ class PersonaDrawer(ft.NavigationDrawer):
             self._on_skin_selected(skin_id)
         self._refresh_selection("auto" if follow else self._current_skin_id)
         self._set_skin_status(
-            "已切换为跟随情绪（重启后生效）。"
+            "已切换为跟随情绪。"
             if follow
-            else f"已锁定「{self._skin_name(self._current_skin_id)}」（重启后生效）。"
+            else f"已锁定「{self._skin_name(self._current_skin_id)}」。"
         )
 
     def _refresh_selection(self, selected_id: str) -> None:

@@ -50,7 +50,7 @@ class InputBar(ft.Container):
             hint_text="想和助手聊点什么？",
             hint_style=ft.TextStyle(color=c.TEXT_MUTED),
             text_style=ft.TextStyle(color=c.TEXT_PRIMARY, size=t.BODY),
-            bgcolor=c.SURFACE_SECONDARY,
+            bgcolor=c.SURFACE_GLASS,  # 半透明玻璃：透出壁纸，避免底部白条
             border=ft.InputBorder.NONE,
             border_radius=ft.BorderRadius.only(
                 top_left=r.MD, top_right=r.MD, bottom_left=r.MD, bottom_right=r.MD
@@ -168,4 +168,20 @@ class InputBar(ft.Container):
         self.update()
 
     def focus(self) -> None:
-        self._field.focus()
+        """聚焦输入框。Flet 0.86.5 的 focus() 返回协程：有事件循环/页面时
+        正确调度，否则放弃（仅聚焦失效，绝不让协程悬空告警或抛异常）。"""
+        import asyncio
+
+        try:
+            result = self._field.focus()
+        except Exception:  # noqa: BLE001 - 离线/未挂载场景
+            return
+        if asyncio.iscoroutine(result):
+            page = getattr(self._field, "page", None)
+            if page is not None:
+                try:
+                    page.run_task(lambda: result)
+                    return
+                except Exception:  # noqa: BLE001
+                    pass
+            result.close()

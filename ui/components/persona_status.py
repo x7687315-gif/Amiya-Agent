@@ -113,7 +113,7 @@ class PersonaStatusPanel(ft.Container):
                 border=ft.Border.all(width=1, color=c.BORDER),
                 border_radius=r.MD,
                 padding=ft.Padding.only(left=sp.MD, right=sp.MD, top=sp.SM + 2, bottom=sp.SM + 2),
-                tooltip="选择外观皮肤（重启后生效）",
+                tooltip="选择外观皮肤（点击即切换）",
                 on_click=lambda _e: self._toggle_skin_panel(),
             )
             self._skin_panel = self._build_skin_panel()
@@ -268,7 +268,7 @@ class PersonaStatusPanel(ft.Container):
             self._auto_switch.value = False
             self._safe_update(self._auto_switch)
         self._refresh_selection(skin_id)
-        self._set_skin_status(f"已选择，重启后生效。")
+        self._set_skin_status(f"已切换为「{self._skin_name_of(skin_id)}」。")
 
     def _handle_auto_toggle(self, e: ft.ControlEvent) -> None:
         follow = bool(getattr(getattr(e, "control", None), "value", False))
@@ -277,8 +277,14 @@ class PersonaStatusPanel(ft.Container):
             self._on_skin_selected(skin_id)
         self._refresh_selection("auto" if follow else self._current_skin_id)
         self._set_skin_status(
-            "跟随情绪（重启后生效）。" if follow else "已锁定当前皮肤（重启后生效）。"
+            "已切换为跟随情绪。" if follow else "已锁定当前皮肤。"
         )
+
+    def _skin_name_of(self, skin_id: str) -> str:
+        for skin in self._skins:
+            if skin.id == skin_id:
+                return skin.name
+        return skin_id
 
     def _refresh_selection(self, selected_id: str) -> None:
         for sid, thumb in self._thumb_by_id.items():

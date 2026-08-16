@@ -59,6 +59,8 @@ class AssistantApp:
         self.page: ft.Page | None = None
         self.agent: Agent | None = None
         self.avatar_provider: "AvatarProvider | None" = None
+        self._persona = None  # run() 后有值；运行时换肤重建用
+        self._rebuilding = False  # 运行时换肤重建中（防重入）
         self._skin_ctx: "SkinContext | None" = None
         self.header: Header | None = None
         self.persona_status: PersonaStatusPanel | None = None
@@ -94,6 +96,7 @@ class AssistantApp:
 
         try:
             persona = load_persona()
+            self._persona = persona  # 运行时换肤重建 UI 需要
         except Exception as e:  # noqa: BLE001
             logger.exception("人格加载失败")
             self._fatal(f"人格配置加载失败：{e}")
@@ -543,16 +546,72 @@ class AssistantApp:
             self.tts_state.set_busy(False)
 
     def _on_skin_selected(self, skin_id: str) -> None:
-        """手动选肤：持久化到 .env（UI_SKIN），重启后生效。
+        """手动选肤：持久化到 .env 并**立即生效**（整体重建 UI）。
 
-        皮肤计划冻结边界：运行时不换肤（Phase 4 再议）；本回调只写配置，
-        界面即时反馈（选中框 + 状态文案）由抽屉自己完成。
+        用户要求即时反馈（2026-08-17），原"重启生效"边界作废。
+        重建安全性：对话数据全在库里，重建后由 _init_history_ui 自动回放今天；
+        正在生成回复时跳过重建（流式 worker 持有旧控件引用），仅写配置。
         """
         try:
             persist_ui_skin(skin_id)
-            logger.info("皮肤选择已保存（重启后生效）：UI_SKIN=%s", skin_id)
         except Exception:  # noqa: BLE001 - 保存失败不影响当前会话
             logger.exception("保存皮肤选择失败（已忽略）")
+            return
+        busy = self.input_bar is not None and getattr(self.input_bar, "_is_loading", False)
+        if busy:
+            logger.info("皮肤已保存，回复完成后重启生效：UI_SKIN=%s", skin_id)
+            return
+        self._apply_skin_runtime()
+
+    def _apply_skin_runtime(self) -> None:
+        """运行时整体换肤：**延迟到事件循环异步重建**。
+
+        实测教训（2026-08-17）：在点击事件回调的调用栈里同步 page.clean()
+        会话会被回收——窗口直接关闭（用户点 winter 后应用消失）。
+        因此这里只调度，真正重建在 run_task 协程里、回调返回之后执行；
+        重建期间置 _rebuilding 防重入。
+        """
+        if self.page is None or self._persona is None or self._rebuilding:
+            return
+        self._rebuilding = True
+        try:
+            self.page.run_task(self._rebuild_ui_async)
+        except Exception:  # noqa: BLE001 - 调度失败恢复标志位
+            self._rebuilding = False
+            raise
+
+    async def _rebuild_ui_async(self) -> None:
+        """重建协程：重读配置 → 重解析皮肤（apply_skin 重写色板单例）→
+        清空页面重建全部控件 → 回放今天的对话。
+
+        依赖属性化的回调（_breathe/_tick）每轮重新读 self.*，自动接管新控件。
+        """
+        try:
+            try:
+                self._settings = load_settings()  # 重读 .env（含刚写入的 UI_SKIN）
+            except ConfigError:
+                return  # 配置异常不重建
+            agent_state = None
+            if self._memory is not None:
+                try:
+                    agent_state = self._memory.state()
+                except Exception:  # noqa: BLE001
+                    agent_state = None
+            self._skin_ctx = bootstrap_skin(self._settings, agent_state=agent_state)
+            self.avatar_provider = self._skin_ctx.avatar_provider
+            logger.info("运行时切换皮肤：%s", self._skin_ctx.skin.id)
+            page = self.page
+            page.clean()
+            self._setup_page(self._persona)
+            self._build_ui(self._persona)
+            self._init_history_ui()
+            page.update()
+            if self.input_bar is not None:
+                self.input_bar.focus()
+        except Exception:  # noqa: BLE001 - 重建失败绝不拖垮会话
+            logger.exception("运行时换肤重建失败")
+        finally:
+            self._rebuilding = False  # 无论成败都复位，避免换肤功能被锁死
 
     def _open_drawer(self) -> None:
         if self.drawer is not None and self.page is not None:
