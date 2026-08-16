@@ -68,8 +68,10 @@ if "%errorlevel%"=="0" (
 )
 
 echo [*] Starting GPT-SoVITS TTS API in a background window...
+REM  NOTE: cmd's `if` swallows the whole rest of line (incl. &&/&) into its body;
+REM        so the mkdir guard MUST be parenthesized, or python never runs when logs/ exists.
 REM 使用 start /D 设置工作目录，避免 cmd /k 嵌套引号与 ^&^& 转义问题。
-start "GPT-SoVITS TTS" /D "%GPT_DIR%" cmd /k "if not exist logs mkdir logs && %GPT_PY% api_v2.py -a %TTS_HOST% -p %TTS_PORT% -c %TTS_CFG% > logs\tts_api.log 2>&1"
+start "GPT-SoVITS TTS" /D "%GPT_DIR%" cmd /k "(if not exist logs mkdir logs) & %GPT_PY% api_v2.py -a %TTS_HOST% -p %TTS_PORT% -c %TTS_CFG% > logs\tts_api.log 2>&1"
 
 REM ============ ③/④ 等待 API ready（超时 600s） ============
 echo [*] Waiting for TTS to be ready (timeout %TIMEOUT_SEC%s)...

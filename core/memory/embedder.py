@@ -17,8 +17,10 @@ import hashlib
 import importlib.util
 import logging
 import math
+import os
 import re
 from array import array
+from pathlib import Path
 from typing import List, Optional, Protocol, Sequence, runtime_checkable
 
 log = logging.getLogger(__name__)
@@ -26,6 +28,23 @@ log = logging.getLogger(__name__)
 DEFAULT_MODEL = "BAAI/bge-small-zh-v1.5"
 FALLBACK_MODEL_NAME = "hashing-zh-v1"
 FALLBACK_DIM = 256
+
+
+def hf_model_cache_dir(model_name: str) -> Optional[Path]:
+    """模型在本地 HuggingFace 缓存中的目录；未缓存返回 None。
+
+    只做目录存在性探测（零网络、零导入），尊重 HF_HUB_CACHE / HF_HOME
+    环境变量，默认 ~/.cache/huggingface/hub。目录布局形如
+    ``models--BAAI--bge-small-zh-v1.5``（组织/模型名中的 / 换成 --）。
+    """
+    hub_root = os.environ.get("HF_HUB_CACHE")
+    if not hub_root:
+        home = os.environ.get("HF_HOME") or os.path.join(
+            os.path.expanduser("~"), ".cache", "huggingface"
+        )
+        hub_root = os.path.join(home, "hub")
+    candidate = Path(hub_root) / ("models--" + model_name.replace("/", "--"))
+    return candidate if candidate.is_dir() else None
 
 _CJK = r"\u4e00-\u9fff\u3400-\u4dbf"
 _CJK_RUN = re.compile(f"[{_CJK}]+")
@@ -156,10 +175,45 @@ class LocalEmbedder:
     def _ensure_model(self):
         if self._model is not None:
             return self._model
-        from sentence_transformers import SentenceTransformer  # 延迟导入
 
-        log.info("正在加载嵌入模型 %s (device=%s)…", self._model_name, self._device)
-        self._model = SentenceTransformer(self._model_name, device=self._device)
+        # 离线优先（2026-08-17 启动卡死修复）：模型已在本地缓存时，跳过
+        # huggingface.co 的更新探测。网络不可达环境下每次 HEAD 超时（约 21s）
+        # × 5 次重试会把首次加载卡住数分钟——而权重明明就在缓存里。
+        #
+        # ⚠ 顺序关键：huggingface_hub 的 constants 在 **import 时快照**
+        # HF_HUB_OFFLINE（实测 1.26.0），因此环境变量必须设在
+        # `from sentence_transformers import ...` 之前，晚设无效。
+        # 已验证的教训：先 import 再设变量，日志会打出"离线加载"但探测照发。
+        offline_cache_hit = hf_model_cache_dir(self._model_name) is not None
+        _restored: List[str] = []
+        if offline_cache_hit:
+            for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+                if key not in os.environ:
+                    os.environ[key] = "1"
+                    _restored.append(key)
+
+        try:
+            from sentence_transformers import SentenceTransformer  # 延迟导入
+
+            log.info("正在加载嵌入模型 %s (device=%s)…", self._model_name, self._device)
+            if _restored:
+                log.info("嵌入模型已在本地缓存，离线加载（跳过 HF 更新探测）")
+            if offline_cache_hit:
+                # 双保险：显式告知只用本地文件（新版 ST 支持；旧版不支持则回退）
+                try:
+                    self._model = SentenceTransformer(
+                        self._model_name, device=self._device, local_files_only=True
+                    )
+                except TypeError:  # pragma: no cover - 旧版签名无此参数
+                    self._model = SentenceTransformer(self._model_name, device=self._device)
+            else:
+                self._model = SentenceTransformer(self._model_name, device=self._device)
+        finally:
+            # 构造完成即恢复环境变量，不污染进程全局配置。
+            # 注意：hub 的 constants 若已快照为 offline，对进程后续仍生效——
+            # 本进程只加载这一个嵌入模型，无副作用。
+            for key in _restored:
+                os.environ.pop(key, None)
         self._dim = int(self._model.get_sentence_embedding_dimension())
         return self._model
 

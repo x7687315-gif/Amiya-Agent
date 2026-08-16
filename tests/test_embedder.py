@@ -75,3 +75,96 @@ def test_local_embedder_name_is_model_without_loading():
     # 不触发模型加载（懒加载），仅验证 name 属性走模型名
     emb = LocalEmbedder(model_name=DEFAULT_MODEL)
     assert emb.name == DEFAULT_MODEL
+
+
+# ---------------------------------------------------------------------------
+# 离线优先（2026-08-17 启动卡死修复）：缓存命中跳过 HF 更新探测
+# ---------------------------------------------------------------------------
+
+
+def test_hf_model_cache_dir_hit_and_miss(tmp_path, monkeypatch):
+    from core.memory.embedder import hf_model_cache_dir
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    assert hf_model_cache_dir("BAAI/bge-small-zh-v1.5") is None  # 未缓存
+
+    model_dir = tmp_path / "hub" / "models--BAAI--bge-small-zh-v1.5"
+    model_dir.mkdir(parents=True)
+    got = hf_model_cache_dir("BAAI/bge-small-zh-v1.5")
+    assert got == model_dir
+
+
+def test_hf_model_cache_dir_respects_hub_cache_env(tmp_path, monkeypatch):
+    from core.memory.embedder import hf_model_cache_dir
+
+    other = tmp_path / "custom"
+    (other / "models--X--Y").mkdir(parents=True)
+    monkeypatch.setenv("HF_HUB_CACHE", str(other))
+    assert hf_model_cache_dir("X/Y") == other / "models--X--Y"
+
+
+def _fake_sentence_transformers(monkeypatch, seen):
+    """注入假 sentence_transformers：构造时记录当时的 HF_HUB_OFFLINE 值。"""
+    import sys
+    import types
+
+    class _FakeST:
+        def __init__(self, name, device="cpu"):
+            import os
+
+            seen.append(os.environ.get("HF_HUB_OFFLINE"))
+
+        def get_sentence_embedding_dimension(self):
+            return 8
+
+    mod = types.ModuleType("sentence_transformers")
+    mod.SentenceTransformer = _FakeST
+    monkeypatch.setitem(sys.modules, "sentence_transformers", mod)
+
+
+def test_local_embedder_offline_when_cached(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    (tmp_path / "hub" / "models--BAAI--bge-small-zh-v1.5").mkdir(parents=True)
+
+    seen = []
+    _fake_sentence_transformers(monkeypatch, seen)
+    e = LocalEmbedder("BAAI/bge-small-zh-v1.5")
+    assert e.dim == 8  # 触发懒加载
+    assert seen == ["1"]  # 构造时处于离线模式（跳过 HF 探测）
+    assert "HF_HUB_OFFLINE" not in os.environ  # 用完恢复，不污染全局
+    assert "TRANSFORMERS_OFFLINE" not in os.environ
+
+
+def test_local_embedder_no_offline_env_when_not_cached(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))  # 缓存目录为空
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+
+    seen = []
+    _fake_sentence_transformers(monkeypatch, seen)
+    e = LocalEmbedder("BAAI/bge-small-zh-v1.5")
+    assert e.dim == 8
+    assert seen == [None]  # 未缓存不强行离线（保留联网下载能力）
+
+
+def test_local_embedder_respects_user_offline_setting(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    (tmp_path / "hub" / "models--BAAI--bge-small-zh-v1.5").mkdir(parents=True)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")  # 用户显式设置：不覆盖、不回收
+
+    seen = []
+    _fake_sentence_transformers(monkeypatch, seen)
+    e = LocalEmbedder("BAAI/bge-small-zh-v1.5")
+    assert e.dim == 8
+    assert seen == ["0"]
+    assert os.environ.get("HF_HUB_OFFLINE") == "0"
