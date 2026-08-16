@@ -50,6 +50,7 @@ class Settings:
     manual_extract_window: int  # 手动「整理记忆」窗口（轮数）；更长以覆盖搁置的话题
     tts_voice: str  # 语音档案名（core/tts/voice_profiles/<name>.yaml），换声音不改代码
     tts_text_lang: str  # 朗读文本语言（zh/en/…，与 /tts 契约一致）
+    tts_enabled: bool  # 语音功能总开关（TTS_ENABLED）。0 = 彻底关闭朗读（🔊 隐藏、不合成），区别于会话级静音
     ui_skin: str  # UI 皮肤："auto" 走情绪联动；否则为具体皮肤 id（starry/warm/…）。单一字段，无 ui_skin_auto。
 
 
@@ -83,5 +84,6 @@ def load_settings() -> Settings:
         manual_extract_window=int(os.getenv("MANUAL_EXTRACT_WINDOW", "20")),
         tts_voice=(os.getenv("TTS_VOICE") or "assistant").strip(),
         tts_text_lang=(os.getenv("TTS_TEXT_LANG") or "zh").strip(),
+        tts_enabled=_env_bool("TTS_ENABLED", True),
         ui_skin=(os.getenv("UI_SKIN") or "auto").strip(),
     )

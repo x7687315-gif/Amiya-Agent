@@ -21,6 +21,10 @@ class Header(ft.Container):
         avatar_provider: AvatarProvider | None = None,
         mute_state: Optional["MuteState"] = None,
         on_new_chat: Optional[Callable[[], None]] = None,
+        voices: Optional[list] = None,
+        current_voice: str = "",
+        on_voice_change: Optional[Callable[[str], None]] = None,
+        show_voice_controls: bool = True,
     ) -> None:
         super().__init__()
         self.persona = persona
@@ -28,6 +32,12 @@ class Header(ft.Container):
         self._avatar_provider = avatar_provider
         self._mute_state = mute_state
         self._on_new_chat = on_new_chat
+        # P3 语音入口：声音切换（声音名经回调外传，组件不感知 TTSService/GPT-SoVITS）
+        self._voices = list(voices or [])
+        self._current_voice = current_voice
+        self._on_voice_change = on_voice_change
+        # 语音功能总开关（TTS_ENABLED=0 时隐藏静音键与声音菜单）
+        self._show_voice_controls = show_voice_controls
 
         self._status_text = ft.Text("在线", color=c.TEXT_MUTED, size=t.CAPTION)
         self._status_dot = self._build_dot()
@@ -50,6 +60,7 @@ class Header(ft.Container):
             on_click=lambda _e: self._on_new_chat() if self._on_new_chat else None,
         )
         self._mute_btn = self._build_mute_btn()
+        self._voice_menu = self._build_voice_menu()
         self._build()
 
         # 入场淡入（由 app 在 page.add 后调用 reveal 触发）
@@ -67,7 +78,44 @@ class Header(ft.Container):
             icon_color=c.TEXT_SECONDARY,
             tooltip="语音：开" if not muted else "语音：静音",
             on_click=self._on_mute_click,
+            visible=self._show_voice_controls,
         )
+
+    # ----- P3 声音切换入口 -----
+    def _voice_items(self) -> list:
+        return [
+            ft.PopupMenuItem(
+                content=ft.Text(v),
+                data=v,
+                checked=(v == self._current_voice),
+                on_click=lambda _e, voice=v: self._on_voice_select(voice),
+            )
+            for v in self._voices
+        ]
+
+    def _build_voice_menu(self):
+        """声音切换菜单（仅当提供声音列表且语音控件可见时显示）。"""
+        if not self._voices or not self._show_voice_controls:
+            return ft.Container(visible=False)  # 占位，不占布局
+        return ft.PopupMenuButton(
+            icon=ft.Icons.RECORD_VOICE_OVER_OUTLINED,
+            icon_color=c.TEXT_SECONDARY,
+            tooltip=f"选择声音（当前：{self._current_voice or '默认'}）",
+            items=self._voice_items(),
+        )
+
+    def _on_voice_select(self, voice: str) -> None:
+        """切换声音：更新勾选与提示，经回调把声音名交给上层（不动 TTSService）。"""
+        self._current_voice = voice
+        if isinstance(self._voice_menu, ft.PopupMenuButton):
+            self._voice_menu.items = self._voice_items()
+            self._voice_menu.tooltip = f"选择声音（当前：{voice}）"
+            self._voice_menu.update()
+        if self._on_voice_change is not None:
+            try:
+                self._on_voice_change(voice)
+            except Exception:  # noqa: BLE001 - 回调异常不影响 UI
+                pass
 
     def _on_mute_click(self, _e: ft.ControlEvent) -> None:
         """翻转全局静音：更新自身图标 + 通知所有订阅者（气泡 🔊 自动隐藏/显示）。"""
@@ -107,6 +155,7 @@ class Header(ft.Container):
                 ),
                 self._status_row,
                 self._new_chat_btn,
+                self._voice_menu,
                 self._mute_btn,
                 self._persona_btn,
             ],

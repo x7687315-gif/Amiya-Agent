@@ -79,6 +79,7 @@ class AssistantApp:
         self.tts_banner: TTSStatusBanner | None = None  # TTS 不可用提示条
         self._tts_voice = "assistant"
         self._tts_lang = "zh"
+        self._tts_enabled = True  # run() 前的安全默认：语音视为可用
         self._settings = None
         self._memory = None
         self._extract_callback = None
@@ -187,7 +188,10 @@ class AssistantApp:
         # - AudioPlayer：本地 wav 播放（winsound 后端，零依赖，FIFO 串行）。
         # - TTSService：薄 HTTP 客户端，把文本送去已运行的 GPT-SoVITS API。
         # - voice / lang 来自 .env（TTS_VOICE / TTS_TEXT_LANG），换声音不改代码。
-        self.mute_state = MuteState()
+        # P3：TTS_ENABLED=0 → 语音功能整体关闭（区别于会话级静音）：
+        # 以"已静音"启动 MuteState（🔊 按钮自动隐藏），并隐藏顶栏语音控件；_speak 另设总闸。
+        self._tts_enabled = settings.tts_enabled
+        self.mute_state = MuteState(muted=not settings.tts_enabled)
         self.player = AudioPlayer()
         self.tts = TTSService()  # 默认加载 assistant 语音档案
         self._tts_voice = settings.tts_voice
@@ -323,6 +327,10 @@ class AssistantApp:
             avatar_provider=self.avatar_provider,
             mute_state=self.mute_state,
             on_new_chat=self._on_new_chat,
+            voices=self.tts.list_voices() if self.tts is not None else [],
+            current_voice=self._tts_voice,
+            on_voice_change=self._on_voice_change,
+            show_voice_controls=self._tts_enabled,
         )
         self.persona_status = PersonaStatusPanel(persona, avatar_provider=self.avatar_provider)
         self.chat_area = ChatArea(
@@ -460,6 +468,14 @@ class AssistantApp:
 
         return _run
 
+    def _on_voice_change(self, voice: str) -> None:
+        """P3 声音切换：更新本会话使用的语音档案。
+
+        仅会话级生效（永久修改请改 .env 的 TTS_VOICE）。UI 只把声音名字符串
+        交给这里，TTSService / GPT-SoVITS 仍对 UI 不可见——解耦边界不破。
+        """
+        self._tts_voice = voice
+
     def _speak_async(self, text: str) -> None:
         """在后台线程朗读（TTS 网络往返约 1-2s，绝不在主线程阻塞 UI）。
 
@@ -479,6 +495,8 @@ class AssistantApp:
         """
         if not text or not text.strip():
             return  # 空文本 / 纯空白：没有可朗读内容，跳过
+        if not self._tts_enabled:
+            return  # 语音功能总开关关闭（TTS_ENABLED=0）：不发起任何合成
         if self.tts is None:
             return  # run() 尚未完成：语音链路未就绪，静默跳过
         if self.mute_state is not None and self.mute_state.muted:
