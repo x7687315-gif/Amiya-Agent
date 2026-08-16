@@ -149,6 +149,9 @@ class MemoryStore(Protocol):
     def add_message(self, role: str, content: str, session_id: str) -> int: ...
     def recent_messages(self, limit: int = 40) -> List[Dict[str, str]]: ...
     def messages_since(self, msg_id: int, limit: int = 200) -> List[Dict[str, object]]: ...
+    def messages_on_day(self, day: str) -> List[Dict[str, object]]: ...
+    def days_with_messages(self, limit: int = 92) -> List[str]: ...
+    def purge_before(self, day: str) -> int: ...
     def upsert_memory(
         self,
         type: str,
@@ -297,6 +300,48 @@ class SQLiteMemoryStore:
         return [
             {"id": r["id"], "role": r["role"], "content": r["content"]} for r in rows
         ]
+
+    def messages_on_day(self, day: str) -> List[Dict[str, object]]:
+        """取某一天（本地时间）的全部对话，时间正序。day 格式 'YYYY-MM-DD'。
+
+        ts 由 add_message 以 datetime.now().isoformat() 写入（形如
+        '2026-08-16T14:30:00.123'），前缀 LIKE 'YYYY-MM-DD%' 恰好按天过滤，
+        且可走 idx_conv_ts 索引。供 UI「按日期浏览历史对话」使用。
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, ts, role, content FROM conversation "
+                "WHERE ts LIKE ? ORDER BY id ASC",
+                (day + "%",),
+            ).fetchall()
+        return [
+            {"id": r["id"], "ts": r["ts"], "role": r["role"], "content": r["content"]}
+            for r in rows
+        ]
+
+    def days_with_messages(self, limit: int = 92) -> List[str]:
+        """有对话记录的日期列表（'YYYY-MM-DD'，新→旧），供日期导航下拉。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT substr(ts, 1, 10) AS d FROM conversation "
+                "ORDER BY d DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [r["d"] for r in rows]
+
+    def purge_before(self, day: str) -> int:
+        """删除 day（'YYYY-MM-DD'，不含）之前的全部对话，返回删除行数。
+
+        滚动窗口治理用：只清 conversation（原始对话），长期记忆 / 候选 /
+        用户画像不动——那些是压缩后的资产，体积小且有独立生命周期。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM conversation WHERE ts < ?",
+                (day + "T",),
+            )
+            self._conn.commit()
+            return cur.rowcount
 
     # ----- 记忆 -----
     def upsert_memory(

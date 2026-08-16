@@ -5,8 +5,9 @@ from typing import Callable, List, Optional
 
 import flet as ft
 
-from ui.theme import ALIGN_CENTER, c, sp, r, layout, anim
+from ui.theme import ALIGN_CENTER, c, t, sp, r, layout, anim
 from ui.components.chat_bubble import ChatBubble
+from ui.components.date_nav import format_day
 from ui.components.thinking_overlay import ThinkingOverlay
 from ui.components.empty_state import EmptyState
 from ui.components.speaker import MuteState
@@ -153,6 +154,76 @@ class ChatArea(ft.Container):
             )
         )
         self._scroll_if_auto()
+
+    # ----- 按日期回放（时间轴 UI） -----
+    def show_day(self, day: str, messages: list, today: str) -> None:
+        """用某一天的库内对话重建聊天区。
+
+        - day == today：交互模式（正常欢迎空态 / 历史回放），可继续输入
+        - day != today：只读浏览——顶部加只读横幅，输入框由 app 层隐藏
+        历史气泡的 🔊 朗读仍可用（朗读的是历史台词本身，无副作用）。
+        """
+        self._unsubscribe_mute(self._list.controls)
+        self._thinking_indicator = None
+        self._has_messages = bool(messages)
+        self._list.controls.clear()
+        if day != today:
+            self._list.controls.append(self._make_readonly_banner(day))
+        if not messages:
+            # 今天没聊过 → 正常欢迎空态；别的天没记录 → 空日提示
+            self._list.controls.append(
+                self._empty_state if day == today else self._make_empty_day_hint(day)
+            )
+        else:
+            for m in messages:
+                role = m.get("role")
+                content = m.get("content") or ""
+                if not content:
+                    continue
+                if role == "user":
+                    self._list.controls.append(ChatBubble.user(content))
+                elif role == "assistant":
+                    self._list.controls.append(
+                        ChatBubble.assistant(
+                            content,
+                            avatar_provider=self._avatar_provider,
+                            on_speak=self._on_speak,
+                            mute_state=self._mute_state,
+                        )
+                    )
+        self._list.update()
+        self._scroll_if_auto()
+
+    def _make_readonly_banner(self, day: str) -> ft.Control:
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.HISTORY_ROUNDED, size=14, color=c.TEXT_MUTED),
+                    ft.Text(
+                        f"正在查看 {format_day(day)} 的对话（只读）",
+                        color=c.TEXT_MUTED,
+                        size=t.CAPTION,
+                    ),
+                ],
+                spacing=sp.SM,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            alignment=ALIGN_CENTER,
+            margin=ft.Margin.only(top=sp.SM, bottom=0),
+        )
+
+    def _make_empty_day_hint(self, day: str) -> ft.Control:
+        return ft.Container(
+            content=ft.Text(
+                f"{format_day(day)} 没有对话记录",
+                color=c.TEXT_MUTED,
+                size=t.CAPTION,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            alignment=ALIGN_CENTER,
+            expand=True,
+            padding=sp.XL,
+        )
 
     def add_error(self, text: str) -> None:
         """添加系统错误提示。"""

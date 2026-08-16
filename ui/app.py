@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime
 from typing import Callable, Optional
 
 # 允许 `python ui/app.py` 直接运行（把项目根加入 path）
@@ -37,6 +38,7 @@ from core.persona import load_persona  # noqa: E402
 from core.tts.service import TTSService  # noqa: E402
 from core.tts.player import AudioPlayer  # noqa: E402
 from ui.components.chat_area import ChatArea  # noqa: E402
+from ui.components.date_nav import DateNav  # noqa: E402
 from ui.components.header import Header  # noqa: E402
 from ui.components.input_bar import InputBar  # noqa: E402
 from ui.components.memory_panel import MemoryPanel  # noqa: E402
@@ -59,6 +61,7 @@ class AssistantApp:
         self.persona_status: PersonaStatusPanel | None = None
         self.chat_area: ChatArea | None = None
         self.input_bar: InputBar | None = None
+        self.date_nav: DateNav | None = None
         self.memory_panel: MemoryPanel | None = None
         self.middle: ft.Column | None = None
         self.drawer: PersonaDrawer | None = None
@@ -176,6 +179,61 @@ class AssistantApp:
         self._setup_page(persona)
         self._build_ui(persona)
         self._start_ambience()
+        self._init_history_ui()  # 时间轴：滚动清理 + 回显今天的对话 + 日期下拉
+
+    # ----- 时间轴（按日期浏览对话） -----
+    def _today_str(self) -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _init_history_ui(self) -> None:
+        """启动时：清滚动窗口 → 刷新日期列表 → 回显今天的对话。
+
+        依赖记忆系统（MEMORY_ENABLED=0 时无对话入库，导航条只显示今天且为空态）。
+        每一步失败都只降级——时间轴是增强功能，绝不阻断聊天主链路。
+        """
+        if self._memory is None:
+            return
+        try:
+            deleted = self._memory.purge_old_conversations(keep_months=3)
+            if deleted:
+                logger.info("滚动清理：%d 条早于保留窗口的对话已删除", deleted)
+        except Exception:  # noqa: BLE001
+            logger.exception("滚动清理失败（已忽略）")
+        self._refresh_day_options()
+        self._load_day(self._today_str())
+
+    def _refresh_day_options(self) -> None:
+        if self._memory is None or self.date_nav is None:
+            return
+        try:
+            days = self._memory.days_with_messages()
+        except Exception:  # noqa: BLE001
+            logger.exception("读取对话日期列表失败（已忽略）")
+            days = []
+        self.date_nav.set_days(days)
+
+    def _load_day(self, day: str) -> None:
+        """加载某天的对话到聊天区；非今天进入只读模式（隐藏输入框）。"""
+        today = self._today_str()
+        messages: list = []
+        if self._memory is not None:
+            try:
+                messages = self._memory.messages_on_day(day)
+            except Exception:  # noqa: BLE001
+                logger.exception("读取历史对话失败（按空日处理）")
+                messages = []
+        if self.chat_area is not None:
+            self.chat_area.show_day(day, messages, today)
+        readonly = day != today
+        if self.input_bar is not None:
+            self.input_bar.visible = not readonly
+            self.input_bar.update()
+        if self.date_nav is not None:
+            self.date_nav.set_today(today)
+            self.date_nav.set_current(day)
+
+    def _on_day_change(self, day: str) -> None:
+        self._load_day(day)
 
     def _setup_page(self, persona) -> None:
         assert self.page is not None
@@ -211,10 +269,11 @@ class AssistantApp:
             mute_state=self.mute_state,
         )
         self.input_bar = InputBar(on_send=self._on_send)
+        self.date_nav = DateNav(on_day_change=self._on_day_change, today=self._today_str())
         self.memory_panel = MemoryPanel(persona, memory=self._memory, on_extract=self._extract_callback)
 
         self.middle = ft.Column(
-            [self.chat_area, self.input_bar],
+            [self.date_nav, self.chat_area, self.input_bar],
             expand=True,
             spacing=0,
         )
@@ -420,6 +479,7 @@ class AssistantApp:
                 self.persona_status.set_state("calm")
             self.input_bar.set_loading(False)
             self.input_bar.focus()
+            self._refresh_day_options()  # 新消息落库后，「今天」应出现在日期下拉里
 
     def _fatal(self, msg: str) -> None:
         assert self.page is not None

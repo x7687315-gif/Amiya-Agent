@@ -28,7 +28,7 @@ set_active_memories 高亮本轮命中——UI 不碰 store，严守分层。
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional, Sequence
 from uuid import uuid4
 
@@ -123,6 +123,34 @@ class MemoryManager:
         避免下一轮重复处理同一批消息。Agent 层只认本方法，不直接碰 store。
         """
         return self._store.messages_since(msg_id, limit=limit)
+
+    # ----- 按日期浏览（时间轴 UI） -----
+    def messages_on_day(self, day: str) -> List[Dict[str, object]]:
+        """取某天（'YYYY-MM-DD'）全部对话（时间正序），供 UI 按日期回放。"""
+        return self._store.messages_on_day(day)
+
+    def days_with_messages(self, limit: int = 92) -> List[str]:
+        """有对话的日期列表（新→旧），供日期导航下拉框。"""
+        return self._store.days_with_messages(limit=limit)
+
+    def purge_old_conversations(
+        self, keep_months: int = 3, *, today: Optional[date] = None
+    ) -> int:
+        """滚动窗口清理：只保留最近 keep_months 个自然月的原始对话。
+
+        例：keep_months=3、今天是 2026-04-15 → 保留 2/3/4 月，删除 1 月及更早
+        （用户规则：到 4 月时把 1 月的数据删掉）。只清 conversation 表，
+        长期记忆 / 候选 / 画像不动。返回删除行数。
+        today 仅供测试注入，生产走系统日期。
+        """
+        ref = today or date.today()
+        months_back = max(1, keep_months) - 1
+        y, m = ref.year, ref.month - months_back
+        while m <= 0:
+            m += 12
+            y -= 1
+        window_start = date(y, m, 1).isoformat()
+        return self._store.purge_before(window_start)
 
     # ----- 手动记忆（Step 2.3；无任何 LLM 参与） -----
     def _check_type(self, type: str) -> None:

@@ -19,9 +19,12 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Optional
 
 from .persona import Persona
+
+_WEEKDAY_ZH = "一二三四五六日"
 
 
 class PromptBuilder:
@@ -36,6 +39,7 @@ class PromptBuilder:
         relationship_block: Optional[str] = None,
         behavior_block: Optional[str] = None,
         emotion_block: Optional[str] = None,
+        now: Optional[datetime] = None,
     ) -> str:
         p = self.persona
         idn = p.identity
@@ -49,6 +53,16 @@ class PromptBuilder:
             "请完全以她的视角、身份与口吻回应，不要跳出角色，"
             "不要声明自己是 AI、助手或语言模型。"
         )
+
+        # 1.5 当前时间（每轮重建 system 时取本机时钟）：助手知道"今天几号、
+        # 现在几点"，时间相关的话题（今天/昨天/早晚问候）不再靠猜。
+        if now is not None:
+            wd = _WEEKDAY_ZH[now.weekday()]
+            parts.append(
+                f"【当前时间】现在是{now.year}年{now.month}月{now.day}日"
+                f" 星期{wd} {now.strftime('%H:%M')}。"
+                "涉及「今天 / 昨天 / 现在」等时间话题时以此为准。"
+            )
 
         # 2. 核心价值观（视角 + 价值观 + 思维方式）：人格定调，先于上下文，减少漂移
         values = self._values_block(idn)

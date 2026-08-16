@@ -18,6 +18,7 @@ Prompt 记忆注入（Step 2.5）：检索命中经 PromptBuilder 定界注入�
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional
 
 from .llm_client import LLMClient
@@ -225,7 +226,7 @@ class Agent:
             if khits:
                 knowledge_block = self._knowledge.render_block(khits)
 
-        # 人格先于上下文：身份 → 核心价值观 → 知识 → 记忆 → 关系 → 情绪 seam → 行为 → 语言
+        # 人格先于上下文：身份 → 当前时间 → 核心价值观 → 知识 → 记忆 → 关系 → 情绪 seam → 行为 → 语言
         relationship_block = self._persona_manager.relationship_block()
         behavior_block = self._persona_manager.behavior_block()
         system_prompt = self.prompt_builder.build_system(
@@ -234,6 +235,7 @@ class Agent:
             relationship_block=relationship_block,
             behavior_block=behavior_block,
             emotion_block=None,  # Emotion seam（本轮不接入真实模型）
+            now=datetime.now(),  # 本机实时时钟：今天几号/几点，时间话题不再靠猜
         )
 
         # on_retrieval 回调：把命中项交给 2.6 的 UI（thinking overlay / 记忆面板）
