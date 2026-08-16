@@ -1,7 +1,7 @@
 """聊天区组件：消息列表、空态、错误提示、滚动控制。"""
 from __future__ import annotations
 
-from typing import List
+from typing import Callable, List, Optional
 
 import flet as ft
 
@@ -9,16 +9,25 @@ from ui.theme import ALIGN_CENTER, c, sp, r, layout, anim
 from ui.components.chat_bubble import ChatBubble
 from ui.components.thinking_overlay import ThinkingOverlay
 from ui.components.empty_state import EmptyState
+from ui.components.speaker import MuteState
 from ui.design.avatar_provider import AvatarProvider
 
 
 class ChatArea(ft.Container):
     """主聊天区，承载消息气泡与状态。"""
 
-    def __init__(self, persona, avatar_provider: AvatarProvider | None = None) -> None:
+    def __init__(
+        self,
+        persona,
+        avatar_provider: AvatarProvider | None = None,
+        on_speak: Callable[[str], None] | None = None,
+        mute_state: Optional["MuteState"] = None,
+    ) -> None:
         super().__init__()
         self.persona = persona
         self._avatar_provider = avatar_provider
+        self._on_speak = on_speak
+        self._mute_state = mute_state
         self._has_messages = False
         self._auto_scroll = True
         self._thinking_indicator: ft.Control | None = None
@@ -104,7 +113,13 @@ class ChatArea(ft.Container):
         """开始助手回复，移除思考指示器并返回文本控件用于流式更新。"""
         self._remove_thinking()
         text_control = ft.Text("", color=c.TEXT_PRIMARY, size=14, selectable=True)
-        bubble = ChatBubble.assistant("", text_control=text_control, avatar_provider=self._avatar_provider)
+        bubble = ChatBubble.assistant(
+            "",
+            text_control=text_control,
+            avatar_provider=self._avatar_provider,
+            on_speak=self._on_speak,
+            mute_state=self._mute_state,
+        )
         self._append_fade(bubble)
         self._scroll_if_auto(layout.SCROLL_DURATION_FAST)
         return text_control
@@ -129,7 +144,14 @@ class ChatArea(ft.Container):
         """直接添加完整的助手消息（非流式或兜底）。"""
         self._ensure_message_list()
         self._remove_thinking()
-        self._append_fade(ChatBubble.assistant(text))
+        self._append_fade(
+            ChatBubble.assistant(
+                text,
+                avatar_provider=self._avatar_provider,
+                on_speak=self._on_speak,
+                mute_state=self._mute_state,
+            )
+        )
         self._scroll_if_auto()
 
     def add_error(self, text: str) -> None:

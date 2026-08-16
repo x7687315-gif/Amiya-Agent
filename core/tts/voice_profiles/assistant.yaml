@@ -1,0 +1,29 @@
+# 助手语音配置（voice profile）。
+# 所有路径集中在此，TTSService 不直接硬编码任何路径。
+#
+# 说明：
+# - gpt_model / sovits_model 仅作记录与未来热切换预留；
+#   /tts 请求本身不发送这两个字段，权重由 GPT-SoVITS API 在启动时
+#   从 GPT_SoVITS/configs/tts_infer.yaml 加载（v1 固定 e15+e8，不热切换）。
+# - reference.text 必须与参考音频内容「人工确认」完全一致：
+#   M1 已亲耳核对，原自动 ASR 的「看.」为误识别，正确文本是「用户，你在忙吗？」。
+# - reference.audio_path 相对本 yaml 所在目录解析。
+
+name: assistant
+gpt_model: GPT_weights_v2Pro/助手-e15.ckpt
+sovits_model: SoVITS_weights_v2Pro/助手_e8_s680.pth
+
+reference:
+  audio_path: assistant/reference.wav
+  text: "用户，你在忙吗？"
+
+prompt_lang: zh              # 参考文本语言
+default_text_lang: zh        # 合成文本默认语言（可被 synthesize 的 text_lang 覆盖）
+
+api:
+  host: 127.0.0.1
+  port: 9880
+  timeout: 30                # 单次 /tts 超时（秒）
+  media_type: wav            # v1 固定 wav（官方 API 另支持 raw/ogg/aac）
+  streaming_mode: false
+  text_split_method: cut5     # 按句切分（官方默认）。cut0=整段不切，长文本会触发 early_stop_num 截断掉字

@@ -1,12 +1,13 @@
 """顶部栏组件：头像、名字、称号、状态、人格抽屉入口。"""
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
 import flet as ft
 
 from ui.theme import c, t, sp, r, layout, anim
 from ui.components.avatar import make_avatar
+from ui.components.speaker import MuteState
 from ui.design.avatar_provider import AvatarProvider
 
 
@@ -18,11 +19,13 @@ class Header(ft.Container):
         persona,
         on_persona_click: Callable[[], None] | None = None,
         avatar_provider: AvatarProvider | None = None,
+        mute_state: Optional["MuteState"] = None,
     ) -> None:
         super().__init__()
         self.persona = persona
         self.on_persona_click = on_persona_click
         self._avatar_provider = avatar_provider
+        self._mute_state = mute_state
 
         self._status_text = ft.Text("在线", color=c.TEXT_MUTED, size=t.CAPTION)
         self._status_dot = self._build_dot()
@@ -37,6 +40,7 @@ class Header(ft.Container):
             tooltip="查看人格",
             on_click=lambda _e: self.on_persona_click() if self.on_persona_click else None,
         )
+        self._mute_btn = self._build_mute_btn()
         self._build()
 
         # 入场淡入（由 app 在 page.add 后调用 reveal 触发）
@@ -45,6 +49,25 @@ class Header(ft.Container):
 
     def _build_dot(self) -> ft.Container:
         return ft.Container(width=8, height=8, bgcolor=c.SUCCESS, border_radius=r.FULL)
+
+    def _build_mute_btn(self) -> ft.IconButton:
+        """M3-C 全局语音开关：🔊 开 / 🔇 静音。初始图标对齐当前状态。"""
+        muted = self._mute_state.muted if self._mute_state is not None else False
+        return ft.IconButton(
+            icon=ft.Icons.VOLUME_OFF if muted else ft.Icons.VOLUME_UP,
+            icon_color=c.TEXT_SECONDARY,
+            tooltip="语音：开" if not muted else "语音：静音",
+            on_click=self._on_mute_click,
+        )
+
+    def _on_mute_click(self, _e: ft.ControlEvent) -> None:
+        """翻转全局静音：更新自身图标 + 通知所有订阅者（气泡 🔊 自动隐藏/显示）。"""
+        if self._mute_state is None:
+            return
+        muted = self._mute_state.toggle()
+        self._mute_btn.icon = ft.Icons.VOLUME_OFF if muted else ft.Icons.VOLUME_UP
+        self._mute_btn.tooltip = "语音：静音" if muted else "语音：开"
+        self._mute_btn.update()
 
     def _build(self) -> None:
         self.bgcolor = c.SURFACE
@@ -74,6 +97,7 @@ class Header(ft.Container):
                     expand=True,
                 ),
                 self._status_row,
+                self._mute_btn,
                 self._persona_btn,
             ],
             spacing=sp.MD,

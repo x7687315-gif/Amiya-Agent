@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>助手 TTS 诊断台 · 直连模型验证</title>
+<style>
+  :root {
+    --bg: #0f1220; --panel: #1a1f33; --panel2: #232a44;
+    --accent: #7c5cff; --accent2: #21c08b; --warn: #ffb454; --err: #ff5c7a;
+    --text: #e8ecf5; --muted: #9aa3bd;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 600px at 70% -10%, #2a2150, var(--bg));
+    color: var(--text); min-height: 100vh; padding: 24px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .banner {
+    padding: 10px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .banner.ok { background: rgba(33,192,139,.15); border: 1px solid rgba(33,192,139,.4); }
+  .banner.bad { background: rgba(255,92,122,.15); border: 1px solid rgba(255,92,122,.4); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .dot.green { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
+  .dot.red { background: var(--err); box-shadow: 0 0 8px var(--err); }
+  .card { background: var(--panel); border: 1px solid #2c3450; border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+  textarea {
+    width: 100%; min-height: 110px; resize: vertical; padding: 12px; border-radius: 10px;
+    border: 1px solid #2c3450; background: var(--panel2); color: var(--text); font-size: 15px; line-height: 1.6;
+  }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; }
+  .row > div { flex: 1 1 200px; }
+  select, .seg { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #2c3450;
+    background: var(--panel2); color: var(--text); font-size: 14px; }
+  .seg { display: flex; gap: 6px; padding: 4px; }
+  .seg button {
+    flex: 1; padding: 8px; border: none; border-radius: 8px; background: transparent;
+    color: var(--muted); cursor: pointer; font-size: 14px;
+  }
+  .seg button.active { background: var(--accent); color: #fff; }
+  .btn {
+    margin-top: 16px; width: 100%; padding: 14px; border: none; border-radius: 12px;
+    background: linear-gradient(90deg, var(--accent), #5b7bff); color: #fff; font-size: 16px;
+    font-weight: 600; cursor: pointer; transition: opacity .2s;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn:hover:not(:disabled) { opacity: .9; }
+
+  /* 进度区 */
+  #progress { display: none; }
+  .stages { list-style: none; padding: 0; margin: 0 0 14px; }
+  .stages li {
+    display: flex; align-items: center; gap: 10px; padding: 7px 0; color: var(--muted); font-size: 14px;
+  }
+  .stages li .ic { width: 18px; text-align: center; }
+  .stages li.active { color: var(--text); }
+  .stages li.done { color: var(--accent2); }
+  .bar { height: 8px; border-radius: 6px; background: var(--panel2); overflow: hidden; position: relative; }
+  .bar .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 30%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 6px; animation: slide 1.2s infinite ease-in-out; }
+  @keyframes slide { 0% { left: -30%; } 100% { left: 100%; } }
+  .metrics { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .metrics b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+  /* 结果 */
+  #result { display: none; }
+  audio { width: 100%; margin-top: 10px; }
+  .dl { display: inline-block; margin-top: 12px; padding: 10px 16px; border-radius: 10px;
+    background: var(--accent2); color: #06281d; font-weight: 600; text-decoration: none; font-size: 14px; }
+  .note { color: var(--warn); font-size: 13px; margin-top: 8px; }
+
+  #error { display: none; background: rgba(255,92,122,.12); border: 1px solid rgba(255,92,122,.4);
+    color: #ffd2db; padding: 12px 14px; border-radius: 10px; font-size: 14px; white-space: pre-wrap; }
+
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre { background: #0c0f1c; border: 1px solid #2c3450; border-radius: 10px; padding: 12px;
+    overflow: auto; font-size: 12px; color: #b9c2dd; max-height: 240px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>助手 TTS 诊断台</h1>
+  <div class="sub">绕过 Agent 调用层，直连 GPT-SoVITS /tts，验证模型本身能否出声。进度真实来自模型流式返回。</div>
+
+  <div id="banner" class="banner bad">
+    <span class="dot red"></span><span id="bannerText">正在检查 TTS 服务…</span>
+  </div>
+
+  <div class="card">
+    <label for="text">合成文本（中文为例；可切英文/日文测试模型多语种）</label>
+    <textarea id="text">用户，欢迎回来。今天也要加油哦。</textarea>
+
+    <div class="row">
+      <div>
+        <label>文本语言</label>
+        <select id="lang">
+          <option value="zh" selected>中文 (zh)</option>
+          <option value="en">英文 (en)</option>
+          <option value="ja">日文 (ja)</option>
+          <option value="yue">粤语 (yue)</option>
+          <option value="ko">韩文 (ko)</option>
+        </select>
+      </div>
+      <div>
+        <label>输出格式</label>
+        <div class="seg" id="fmt">
+          <button data-v="wav" class="active">WAV</button>
+          <button data-v="mp4">MP4</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn" id="go">▶ 开始合成</button>
+  </div>
+
+  <div class="card" id="progress">
+    <label>合成进度</label>
+    <ul class="stages" id="stages">
+      <li data-s="check"><span class="ic">○</span><span class="t">检查 TTS 服务</span></li>
+      <li data-s="send"><span class="ic">○</span><span class="t">发送文本到模型</span></li>
+      <li data-s="synth"><span class="ic">○</span><span class="t">模型推理（流式接收音频）</span></li>
+      <li data-s="pack"><span class="ic">○</span><span class="t">封装音频文件</span></li>
+      <li data-s="encode"><span class="ic">○</span><span class="t">转码（如选 MP4）</span></li>
+    </ul>
+    <div class="bar"><div class="fill"></div></div>
+    <div class="metrics">
+      <span>段落：<b id="mChunkIdx">0/0</b></span>
+      <span>已接收音频：<b id="mBytes">0 KB</b></span>
+      <span>音频块：<b id="mChunks">0</b></span>
+      <span>耗时：<b id="mElapsed">0.0s</b></span>
+    </div>
+  </div>
+
+  <div class="card" id="result">
+    <label>合成完成 · 试听与下载</label>
+    <audio id="audio" controls></audio>
+    <div>
+      <a class="dl" id="dl" href="#" download>⬇ 下载音频</a>
+      <span id="rMeta" class="note" style="color:var(--muted)"></span>
+    </div>
+    <div id="rNote" class="note"></div>
+    <details>
+      <summary>调试信息：实际发送给 /tts 的请求体</summary>
+      <pre id="dbg"></pre>
+    </details>
+  </div>
+
+  <div id="error"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let fmt = "wav";
+
+// 格式切换
+$("fmt").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  [...$("fmt").children].forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  fmt = b.dataset.v;
+});
+
+// 健康检查
+async function checkHealth() {
+  try {
+    const r = await fetch("/api/health");
+    const j = await r.json();
+    if (j.ready) {
+      $("banner").className = "banner ok";
+      $("banner").innerHTML = '<span class="dot green"></span><span>TTS 服务在线（127.0.0.1:9880）。可直接合成。</span>';
+    } else {
+      bannerBad();
+    }
+  } catch {
+    bannerBad();
+  }
+}
+function bannerBad() {
+  $("banner").className = "banner bad";
+  $("banner").innerHTML = '<span class="dot red"></span><span>TTS 服务未启动。请先双击 start_assistant.bat 并保持黑色 TTS 窗口开启，再刷新本页。</span>';
+}
+checkHealth();
+
+const STAGE_ORDER = ["check", "send", "synth", "pack", "encode"];
+function setStage(name) {
+  const idx = STAGE_ORDER.indexOf(name);
+  [...$("stages").children].forEach(li => {
+    const s = li.dataset.s;
+    const si = STAGE_ORDER.indexOf(s);
+    li.classList.remove("active", "done");
+    if (si < idx) li.classList.add("done");
+    else if (si === idx) li.classList.add("active");
+    const ic = li.querySelector(".ic");
+    ic.textContent = si < idx ? "✓" : (si === idx ? "●" : "○");
+  });
+}
+function resetStages() {
+  [...$("stages").children].forEach(li => { li.classList.remove("active","done"); li.querySelector(".ic").textContent = "○"; });
+}
+
+function fmtBytes(b) {
+  if (b < 1024) return b + " B";
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " KB";
+  return (b / 1024 / 1024).toFixed(2) + " MB";
+}
+
+$("go").addEventListener("click", async () => {
+  const text = $("text").value.trim();
+  if (!text) { showError("请先输入要合成的文本。"); return; }
+
+  $("go").disabled = true;
+  $("error").style.display = "none";
+  $("result").style.display = "none";
+  $("progress").style.display = "block";
+  resetStages();
+  $("mBytes").textContent = "0 KB"; $("mChunks").textContent = "0"; $("mElapsed").textContent = "0.0s"; $("mChunkIdx").textContent = "0/0";
+
+  try {
+    const resp = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, format: fmt, lang: $("lang").value }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const lines = block.split("\n").filter(l => l.startsWith("data:"));
+        for (const line of lines) {
+          const json = line.slice(5).trim();
+          if (!json) continue;
+          handleEvent(JSON.parse(json));
+        }
+      }
+    }
+  } catch (e) {
+    showError("前端异常: " + e.message);
+  } finally {
+    $("go").disabled = false;
+  }
+});
+
+function handleEvent(ev) {
+  if (ev.type === "stage") {
+    setStage(ev.stage);
+  } else if (ev.type === "progress") {
+    $("mBytes").textContent = fmtBytes(ev.bytes);
+    $("mChunks").textContent = ev.chunks;
+    $("mElapsed").textContent = ev.elapsed + "s";
+    if (ev.chunk_total) $("mChunkIdx").textContent = ev.chunks + "/" + ev.chunk_total;
+  } else if (ev.type === "done") {
+    $("progress").style.display = "none";
+    $("result").style.display = "block";
+    $("audio").src = ev.url;
+    const dl = $("dl");
+    dl.href = ev.url;
+    dl.download = ev.name;
+    $("rMeta").textContent = `${ev.name} · ${ev.format.toUpperCase()} · ${fmtBytes(ev.size)} · 用时 ${ev.elapsed}s`;
+    $("rNote").textContent = ev.note || "";
+    $("dbg").textContent = JSON.stringify(ev.payload, null, 2);
+  } else if (ev.type === "error") {
+    $("progress").style.display = "none";
+    showError(ev.message);
+  }
+}
+
+function showError(msg) {
+  const e = $("error");
+  e.style.display = "block";
+  e.textContent = "❌ " + msg;
+}
+</script>
+</body>
+</html>

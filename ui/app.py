@@ -34,12 +34,15 @@ from core.memory import (  # noqa: E402
 )
 from core.knowledge import build_knowledge_manager  # noqa: E402
 from core.persona import load_persona  # noqa: E402
+from core.tts.service import TTSService  # noqa: E402
+from core.tts.player import AudioPlayer  # noqa: E402
 from ui.components.chat_area import ChatArea  # noqa: E402
 from ui.components.header import Header  # noqa: E402
 from ui.components.input_bar import InputBar  # noqa: E402
 from ui.components.memory_panel import MemoryPanel  # noqa: E402
 from ui.components.persona_drawer import PersonaDrawer  # noqa: E402
 from ui.components.persona_status import PersonaStatusPanel  # noqa: E402
+from ui.components.speaker import MuteState  # noqa: E402
 from ui.design.avatar_provider import ImageAvatarProvider, TextAvatarProvider  # noqa: E402
 from ui.theme import ALIGN_CENTER, ALIGN_TOP_CENTER, c, layout, anim  # noqa: E402
 
@@ -152,6 +155,14 @@ class AssistantApp:
         # 点击后后台线程调 Agent.extract_now（AI 只提议 candidate），人再走 M3.2 拍板。
         self._extract_callback = self._make_extract_callback()
 
+        # M3 语音朗读链路：与 Agent / LLM 完全解耦，失败降级不致命。
+        # - MuteState：全局语音开关（ observable，默认开）。
+        # - AudioPlayer：本地 wav 播放（winsound 后端，零依赖）。
+        # - TTSService：薄 HTTP 客户端，把文本送去已运行的 GPT-SoVITS API。
+        self.mute_state = MuteState()
+        self.player = AudioPlayer()
+        self.tts = TTSService()  # 默认加载 assistant 语音档案
+
         # 将记忆系统生命周期延长到实例属性，供 _build_ui 构造 MemoryPanel 使用
         self._memory = memory
 
@@ -179,9 +190,19 @@ class AssistantApp:
         self.page.end_drawer = self.drawer
 
         # 三栏组件
-        self.header = Header(persona, on_persona_click=self._open_drawer, avatar_provider=self.avatar_provider)
+        self.header = Header(
+            persona,
+            on_persona_click=self._open_drawer,
+            avatar_provider=self.avatar_provider,
+            mute_state=self.mute_state,
+        )
         self.persona_status = PersonaStatusPanel(persona, avatar_provider=self.avatar_provider)
-        self.chat_area = ChatArea(persona, avatar_provider=self.avatar_provider)
+        self.chat_area = ChatArea(
+            persona,
+            avatar_provider=self.avatar_provider,
+            on_speak=self._speak_async,
+            mute_state=self.mute_state,
+        )
         self.input_bar = InputBar(on_send=self._on_send)
         self.memory_panel = MemoryPanel(persona, memory=self._memory, on_extract=self._extract_callback)
 
@@ -292,6 +313,36 @@ class AssistantApp:
                 return -1
 
         return _run
+
+    def _speak_async(self, text: str) -> None:
+        """在后台线程朗读（TTS 网络往返约 1-2s，绝不在主线程阻塞 UI）。
+
+        由气泡 🔊 按钮的 on_click 调用，文本固定为「该气泡自己的台词」。
+        """
+        assert self.page is not None
+        self.page.run_thread(self._speak, text)
+
+    def _speak(self, text: str) -> None:
+        """朗读一句台词：TTS 合成 → 本地播放。失败只降级，不抛、不拖垮 UI。
+
+        原则（M3）：语音失败 ≠ Agent 失败。合成或播放失败都静默跳过本条朗读。
+        整个链路（网络合成 + 本地播放）都在后台线程跑（_speak_async 经 run_thread
+        调度），不阻塞 UI；AudioPlayer 内部再启独立 daemon 线程同步播放，避免
+        winsound.SND_ASYNC 在某些线程环境静默失效的问题。
+        """
+        if not text or not text.strip():
+            return  # 空文本 / 纯空白：没有可朗读内容，跳过
+        if self.mute_state is not None and self.mute_state.muted:
+            return  # 全局静音：直接跳过，不发任何 TTS 请求
+        logger.info("正在为文本请求助手语音：%s", text[:40])
+        result = self.tts.synthesize(text=text, voice="assistant", text_lang="zh")
+        if result.success and result.audio is not None and getattr(result.audio, "data", b""):
+            if self.player.play(result.audio):
+                logger.info("助手语音开始播放")
+            else:
+                logger.warning("助手语音播放失败（winsound 不可用或音频无效）")
+        else:
+            logger.warning("助手语音合成失败，本条不朗读：%s", result.error)
 
     def _open_drawer(self) -> None:
         if self.drawer is not None and self.page is not None:
