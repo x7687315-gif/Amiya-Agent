@@ -47,7 +47,9 @@ class ChatArea(ft.Container):
             on_scroll=self._on_scroll,
         )
         self.content = ft.Stack([self._list, self._scroll_btn], expand=True)
-        self.bgcolor = c.BG
+        # 透明背景：让皮肤壁纸透出（气泡本身是 SURFACE/PRIMARY_LIGHT 不透明卡片，
+        # 聊天文字始终落在卡片上，可读性不受影响）
+        self.bgcolor = None
         self.expand = True
 
     def _build_scroll_btn(self) -> ft.Container:
