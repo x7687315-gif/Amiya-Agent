@@ -46,7 +46,8 @@ from ui.components.persona_drawer import PersonaDrawer  # noqa: E402
 from ui.components.persona_status import PersonaStatusPanel  # noqa: E402
 from ui.components.speaker import MuteState  # noqa: E402
 from ui.components.tts_status import TTSStatusBanner, TTSStatusState  # noqa: E402
-from ui.design.avatar_provider import ImageAvatarProvider, TextAvatarProvider  # noqa: E402
+from ui.design.avatar_provider import AvatarProvider  # noqa: E402
+from ui.design.skin import SkinContext, bootstrap_skin  # noqa: E402
 from ui.theme import ALIGN_CENTER, ALIGN_TOP_CENTER, c, layout, anim  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -57,7 +58,8 @@ class AssistantApp:
     def __init__(self) -> None:
         self.page: ft.Page | None = None
         self.agent: Agent | None = None
-        self.avatar_provider: "ImageAvatarProvider | TextAvatarProvider | None" = None
+        self.avatar_provider: "AvatarProvider | None" = None
+        self._skin_ctx: "SkinContext | None" = None
         self.header: Header | None = None
         self.persona_status: PersonaStatusPanel | None = None
         self.chat_area: ChatArea | None = None
@@ -96,10 +98,6 @@ class AssistantApp:
             self._fatal(f"人格配置加载失败：{e}")
             return
 
-        self.avatar_provider = ImageAvatarProvider(
-            folder=os.path.join(os.path.dirname(__file__), "..", "resources", "avatar"),
-            fallback=TextAvatarProvider(text="阿", bgcolor=c.PRIMARY, text_color=c.ON_PRIMARY),
-        )
         # 记忆系统：启用时才建（MEMORY_ENABLED=1）。失败不致命——助手退回纯内存。
         memory = None
         if settings.memory_enabled:
@@ -116,6 +114,19 @@ class AssistantApp:
             except Exception:  # noqa: BLE001
                 logger.exception("记忆系统初始化失败，助手将以纯内存模式运行")
                 memory = None
+
+        # 皮肤系统：初始化归属 bootstrap 层，app.py 只消费 SkinContext（计划 §7）。
+        # 一次性 apply_skin 必须发生在 _setup_page/_build_ui 读取 c 之前。
+        # agent_state 取自记忆层（含 last_emotion/last_emotion_at，情绪 seam 落地后生效）；
+        # Skin 只读取情绪，绝不写回 Agent（红线：单向，Skin 不影响 Agent 行为）。
+        agent_state = None
+        if memory is not None:
+            try:
+                agent_state = memory.state()
+            except Exception:  # noqa: BLE001
+                agent_state = None
+        self._skin_ctx = bootstrap_skin(settings, agent_state=agent_state)
+        self.avatar_provider = self._skin_ctx.avatar_provider
 
         # 角色知识库（Knowledge RAG）：knowledge/ 目录存在才启用，失败不致命。
         # 与记忆系统完全独立——知识是"设定"，记忆是"经历"，互不混入。
@@ -354,12 +365,27 @@ class AssistantApp:
             bgcolor=c.BRIDGE_ACCENT,
             opacity=0.10,
         )
-        bg = ft.Container(
-            content=self._glow,
-            alignment=ALIGN_TOP_CENTER,
-            bgcolor=c.BG,
-            expand=True,
+        # 皮肤壁纸（与头像同源）：全屏铺底 + 浅色遮罩保证前景可读 + 舰桥光晕。
+        # 皮肤资源缺失时退化为纯色背景（c.BG），行为与皮肤系统上线前一致。
+        bg_layers: list[ft.Control] = []
+        bg_path = self._skin_ctx.background_path if self._skin_ctx else None
+        if bg_path and os.path.isfile(str(bg_path)):
+            bg_layers.append(
+                ft.Image(src=str(bg_path), fit=ft.ImageFit.COVER, expand=True)
+            )
+            bg_layers.append(
+                ft.Container(
+                    bgcolor=c.BG,
+                    opacity=self._skin_ctx.scrim_opacity if self._skin_ctx else 0.8,
+                    expand=True,
+                )
+            )
+        else:
+            bg_layers.append(ft.Container(bgcolor=c.BG, expand=True))
+        bg_layers.append(
+            ft.Container(content=self._glow, alignment=ALIGN_TOP_CENTER, expand=True)
         )
+        bg = ft.Stack(bg_layers, expand=True)
         root = ft.Stack([bg, ft.Column([self.header, body], expand=True)], expand=True)
 
         self.page.add(root)

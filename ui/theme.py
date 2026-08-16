@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import flet as ft
 
@@ -164,3 +164,24 @@ EMOTIONS: dict[str, EmotionState] = {
 }
 
 DEFAULT_EMOTION = "calm"
+
+
+def apply_skin(colors: Colors) -> None:
+    """把皮肤色板**一次性**写入单例 ``c``（必须在构造任何 UI 之前调用）。
+
+    设计说明（皮肤系统计划 §4「无 DynamicColors」）：
+    - 这不是动态代理。``c`` 仍是一个普通的 ``Colors`` 单例，只是在启动阶段被
+      初始化一次。所有组件继续 ``from ui.theme import c``，调用点零改动。
+    - 因为各组件是直接 ``import c``（绑定的是同一个对象引用），所以这里必须
+      **原地修改** ``c`` 的字段，而不能把 ``c`` 重新绑定到新对象——否则已导入方
+      仍指向旧实例。``Colors`` 是 frozen dataclass，故用 ``object.__setattr__``
+      绕过冻结做这一次性初始化（每个会话只应在启动时调用一次）。
+    - 运行时完整换肤（若将来真做）再引入动态 ThemeProvider，不在此处预支。
+    """
+    for f in fields(Colors):
+        object.__setattr__(c, f.name, getattr(colors, f.name))
+    # EMOTIONS 为可变 dict，原地替换条目，使 STATE_* 颜色与新色板保持同步。
+    for key, state in EMOTIONS.items():
+        EMOTIONS[key] = EmotionState(
+            state.key, state.emoji, state.label, getattr(c, f"STATE_{key.upper()}")
+        )

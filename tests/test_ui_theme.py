@@ -1,4 +1,9 @@
-"""Design Token 单元测试：确认色值/常量集中、无遗漏。"""
+"""Design Token 单元测试：确认色值/常量集中、无遗漏。
+
+默认皮肤契约：本文件断言的是**未应用任何皮肤**时的 light 默认色板。
+apply_skin 之后的色板切换由 tests/test_skin_manager.py 覆盖（该文件用
+autouse fixture 在测试后恢复默认，保证本文件看到的仍是默认 c）。
+"""
 from __future__ import annotations
 
 from ui.theme import c, t, sp, r, layout, anim, EMOTIONS, DEFAULT_EMOTION

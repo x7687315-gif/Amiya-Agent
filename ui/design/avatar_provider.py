@@ -101,3 +101,50 @@ class ImageAvatarProvider(AvatarProvider):
                 ),
             )
         return self._fallback.get(state_key=state_key, radius=radius, text_size=text_size, **kwargs)
+
+
+class SkinAvatarProvider(AvatarProvider):
+    """皮肤头像提供方：同皮肤内统一头像，不随情绪状态键切换图片。
+
+    与 ImageAvatarProvider 的区别：皮肤系统里"一张图 = 头像 + 壁纸"，
+    头像固定为当前皮肤的 avatar.png，情绪键不再换图（避免同皮肤内闪烁）。
+    缺失时回退到 default_path（resources/avatar/default.png），再缺才回退
+    fallback（默认文字头像）。
+
+    只接收路径而非 Skin 对象，避免与 ui/design/skin.py 形成循环导入。
+    """
+
+    def __init__(
+        self,
+        avatar_path: str,
+        default_path: str | None = None,
+        fallback: AvatarProvider | None = None,
+        size: int = 96,
+    ) -> None:
+        self._avatar_path = avatar_path
+        self._default_path = default_path
+        self._fallback = fallback or TextAvatarProvider()
+        self._size = size
+
+    def get(
+        self,
+        *,
+        state_key: str = "calm",
+        radius: int,
+        text_size: int | None = None,
+        **kwargs,
+    ) -> ft.Control:
+        path = self._avatar_path
+        if not os.path.isfile(path) and self._default_path:
+            path = self._default_path
+        if os.path.isfile(path):
+            return ft.CircleAvatar(
+                radius=radius,
+                content=ft.Image(
+                    src=path,
+                    width=2 * radius,
+                    height=2 * radius,
+                    border_radius=radius,
+                ),
+            )
+        return self._fallback.get(state_key=state_key, radius=radius, text_size=text_size, **kwargs)
