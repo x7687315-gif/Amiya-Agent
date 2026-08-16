@@ -88,6 +88,7 @@ class ChatBubble:
         ]
 
         # M3-B：每个最终助手气泡末尾挂一个 🔊，点它只读这一句
+        mute_cb = None
         if on_speak is not None:
             speaker = ft.IconButton(
                 icon=ft.Icons.VOLUME_UP,
@@ -107,15 +108,21 @@ class ChatBubble:
 
             if mute_state is not None:
                 mute_state.subscribe(_apply_mute)
+                mute_cb = _apply_mute
             else:
                 speaker.visible = True
             row.append(speaker)
 
-        return ft.Row(
+        holder = ft.Row(
             row,
             spacing=sp.SM,
             vertical_alignment=ft.CrossAxisAlignment.START,
         )
+        if mute_state is not None and mute_cb is not None:
+            # 供 ChatArea.clear() 退订，防止气泡销毁后订阅闭包滞留 MuteState（泄漏）
+            holder._mute_state = mute_state  # type: ignore[attr-defined]
+            holder._mute_cb = mute_cb  # type: ignore[attr-defined]
+        return holder
 
     @staticmethod
     def error(text: str) -> ft.Control:

@@ -1,36 +1,39 @@
-ï»¿chcp 65001 >nul
 @echo off
 REM =====================================================================
-REM  M4: start_assistant.bat  â€”  ä¸€é”®å¯åŠ¨ åŠ©æ‰‹ Agent + åŠ©æ‰‹è¯­éŸ³
-REM  ä¸¥æ ¼é¡ºåºï¼šTTS â†’ ç­‰å¾… ready â†’ Agentï¼ˆç»ä¸æŠ¢è·‘ï¼‰
-REM  ä¸‰é¡¹ä¿æŠ¤ï¼š
-REM    â‘  å¯åŠ¨è¶…æ—¶ï¼šç­‰ 600s ä»ä¸ ready â†’ æ˜ç¡®æŠ¥é”™ï¼ŒAgent ä»¥çº¯æ–‡å­—æ¨¡å¼å¯åŠ¨
-REM    â‘¡ å·²è¿è¡Œåˆ™å¤ç”¨ï¼š9880 å·²åœ¨çº¿å°±ç›´æ¥å¤ç”¨ï¼Œä¸å¯ç¬¬äºŒä¸ª GPT-SoVITS
-REM    â‘¢ Agent é€€å‡ºä¸æ€ TTSï¼šTTS / Agent å„è‡ªç‹¬ç«‹çª—å£ï¼Œå…³ Agent ä¸å½±å“ TTS
-REM  ä¾èµ–ï¼štools\tts_health.pyï¼ˆä»…æ ‡å‡†åº“ï¼Œä»»æ„ Python å¯è·‘ï¼‰
-REM  æ³¨æ„ï¼šè·¯å¾„å«ç©ºæ ¼ä¼šç ´å start çš„å¼•å·ï¼Œè¯·å°† GPT-SoVITS / assistant-agent
-REM        æ”¾åœ¨ã€æ— ç©ºæ ¼ã€‘è·¯å¾„ä¸‹ï¼ˆå½“å‰é»˜è®¤è·¯å¾„å‡æ»¡è¶³ï¼‰ã€‚
+REM  M4: start_assistant.bat  ¡ª  Ò»¼üÆô¶¯ °¢Ã×æ« Agent + °¢Ã×æ«ÓïÒô
+REM  ÑÏ¸ñË³Ğò£ºTTS ¡ú µÈ´ı ready ¡ú Agent£¨¾ø²»ÇÀÅÜ£©
+REM  ÈıÏî±£»¤£º
+REM    ¢Ù Æô¶¯³¬Ê±£ºµÈ 600s ÈÔ²» ready ¡ú Ã÷È·±¨´í£¬Agent ÒÔ´¿ÎÄ×ÖÄ£Ê½Æô¶¯
+REM    ¢Ú ÒÑÔËĞĞÔò¸´ÓÃ£º9880 ÒÑÔÚÏß¾ÍÖ±½Ó¸´ÓÃ£¬²»ÆôµÚ¶ş¸ö GPT-SoVITS
+REM    ¢Û Agent ÍË³ö²»É± TTS£ºTTS / Agent ¸÷×Ô¶ÀÁ¢´°¿Ú£¬¹Ø Agent ²»Ó°Ïì TTS
+REM  ÒÀÀµ£ºtools\tts_health.py£¨½ö±ê×¼¿â£¬ÈÎÒâ Python ¿ÉÅÜ£©
+REM  ×¢Òâ£ºÂ·¾¶º¬¿Õ¸ñ»áÆÆ»µ start µÄÒıºÅ£¬Çë½« GPT-SoVITS / assistant-agent
+REM        ·ÅÔÚ¡¾ÎŞ¿Õ¸ñ¡¿Â·¾¶ÏÂ£¨µ±Ç°Ä¬ÈÏÂ·¾¶¾ùÂú×ã£©¡£
 REM =====================================================================
 
 setlocal EnableDelayedExpansion
+REM  ¡¾±àÂëÔ¼Êø¡¿±¾ÎÄ¼ş±ØĞë±£´æÎª ANSI/GBK ±àÂë¡£²»Òª¸Ä³É UTF-8£¬
+REM  Ò²²»Òª¼Ó chcp 65001 ¡ª¡ª cmd ½âÎöÖĞÍ¾ÇĞ´úÂëÒ³»á´íÎ»Ö´ĞĞ REM Æ¬¶Î£¨ÒÑÊµ²â£©¡£
 title Assistant Launcher (M4)
 
-REM ---------- å¯é…ç½®é¡¹ï¼ˆå¦‚è·¯å¾„å˜åŠ¨æ”¹è¿™é‡Œå³å¯ï¼‰ ----------
+REM ---------- ¿ÉÅäÖÃÏî£¨ÈçÂ·¾¶±ä¶¯¸ÄÕâÀï¼´¿É£© ----------
 set "GPT_DIR=<GPT_SOVITS_DIR>"
 set "GPT_PY=%GPT_DIR%\runtime\python.exe"
 set "AGENT_DIR=<ASSISTANT_AGENT_DIR>"
 set "AGENT_PY=%AGENT_DIR%\.venv\Scripts\python.exe"
 set "TTS_HOST=127.0.0.1"
 set "TTS_PORT=9880"
+REM  ¡¾Í¬²½ÌáĞÑ¡¿TTS_HOST/TTS_PORT ±ØĞëÓë core\tts\voice_profiles\assistant.yaml
+REM             µÄ api.host/port ±£³ÖÒ»ÖÂ£¨Agent °´¸Ã yaml Á¬½Ó TTS£©¡£
 set "TIMEOUT_SEC=600"
 set "TTS_CFG=GPT_SoVITS\configs\tts_infer.yaml"
 
 echo ============================================================
-echo   Assistant Launcher ^(M4^)  â€”  Agent + Voice
+echo   Assistant Launcher ^(M4^)  ¡ª  Agent + Voice
 echo ============================================================
 echo.
 
-REM ============ â‘  ç¯å¢ƒæ£€æŸ¥ ============
+REM ============ ¢Ù »·¾³¼ì²é ============
 echo [*] Environment checks...
 set "CHK_FAIL=0"
 
@@ -43,7 +46,7 @@ if not exist "%AGENT_PY%"      (echo   [X] Agent venv python missing            
 if not exist "%AGENT_DIR%\ui\app.py" (echo   [X] ui/app.py missing                    & set CHK_FAIL=1)
 if not exist "%AGENT_DIR%\tools\tts_health.py" (echo   [X] tools/tts_health.py missing        & set CHK_FAIL=1)
 
-REM flet æ˜¯å¦è£…è¿› Agent venvï¼ˆAgent å¯åŠ¨å¼ºä¾èµ–ï¼‰
+REM flet ÊÇ·ñ×°½ø Agent venv£¨Agent Æô¶¯Ç¿ÒÀÀµ£©
 "%AGENT_PY%" -c "import flet" >nul 2>&1
 if errorlevel 1 (echo   [X] flet not installed in Agent venv          & set CHK_FAIL=1)
 
@@ -56,7 +59,7 @@ if "%CHK_FAIL%"=="1" (
 echo   [OK] Environment checks passed.
 echo.
 
-REM ============ â‘¡ å¤ç”¨ or å¯åŠ¨ TTS ============
+REM ============ ¢Ú ¸´ÓÃ or Æô¶¯ TTS ============
 echo [*] Checking if TTS already running on :%TTS_PORT%...
 "%AGENT_PY%" "%AGENT_DIR%\tools\tts_health.py" --host %TTS_HOST% --port %TTS_PORT% --timeout 2 --interval 1
 if "%errorlevel%"=="0" (
@@ -65,24 +68,23 @@ if "%errorlevel%"=="0" (
 )
 
 echo [*] Starting GPT-SoVITS TTS API in a background window...
-REM ä½¿ç”¨ start /D è®¾ç½®å·¥ä½œç›®å½•ï¼Œé¿å… cmd /k åµŒå¥—å¼•å·ä¸ ^&^& è½¬ä¹‰é—®é¢˜ã€‚
+REM Ê¹ÓÃ start /D ÉèÖÃ¹¤×÷Ä¿Â¼£¬±ÜÃâ cmd /k Ç¶Ì×ÒıºÅÓë ^&^& ×ªÒåÎÊÌâ¡£
 start "GPT-SoVITS TTS" /D "%GPT_DIR%" cmd /k "if not exist logs mkdir logs && %GPT_PY% api_v2.py -a %TTS_HOST% -p %TTS_PORT% -c %TTS_CFG% > logs\tts_api.log 2>&1"
 
-REM ============ â‘¢/â‘£ ç­‰å¾… API readyï¼ˆè¶…æ—¶ 600sï¼‰ ============
-:wait_ready
+REM ============ ¢Û/¢Ü µÈ´ı API ready£¨³¬Ê± 600s£© ============
 echo [*] Waiting for TTS to be ready (timeout %TIMEOUT_SEC%s)...
 "%AGENT_PY%" "%AGENT_DIR%\tools\tts_health.py" --host %TTS_HOST% --port %TTS_PORT% --timeout %TIMEOUT_SEC% --interval 2
 if "%errorlevel%"=="0" (
     echo   [OK] GPT-SoVITS TTS ready on :%TTS_PORT%.
 ) else (
     echo   [WARN] GPT-SoVITS TTS did not become ready within %TIMEOUT_SEC%s.
-    echo   [WARN] Assistant Agent will start in TEXT-ONLY modeï¼ˆvoice disabledï¼‰. å¤±è´¥ä¸è‡´å‘½ã€‚
+    echo   [WARN] Assistant Agent will start in TEXT-ONLY mode£¨voice disabled£©. Ê§°Ü²»ÖÂÃü¡£
 )
 
-REM ============ â‘¤ å¯åŠ¨ Agent ============
+REM ============ ¢İ Æô¶¯ Agent ============
 :start_agent
 echo [*] Starting Assistant Agent...
-REM ç›´æ¥ç”¨ start /D è¿è¡Œ Agent pythonï¼Œä¸ç»è¿‡ cmd /kï¼Œå½»åº•é¿å…å¼•å·åµŒå¥—ã€‚
+REM Ö±½ÓÓÃ start /D ÔËĞĞ Agent python£¬²»¾­¹ı cmd /k£¬³¹µ×±ÜÃâÒıºÅÇ¶Ì×¡£
 start "Assistant Agent" /D "%AGENT_DIR%" "%AGENT_PY%" "ui/app.py"
 
 echo.

@@ -31,6 +31,11 @@ class MuteState:
         except Exception:  # noqa: BLE001 - 订阅回调异常不影响状态机
             pass
 
+    def unsubscribe(self, cb: Callable[[bool], None]) -> None:
+        """退订。气泡被移出聊天区（如清空会话）时必须调用，否则闭包连着
+        IconButton 一起被订阅集合强引用，订阅只增不减造成泄漏。"""
+        self._subs.discard(cb)
+
     def toggle(self) -> bool:
         """翻转开关并通知所有订阅者，返回翻转后的 muted 值。"""
         return self.set(not self._muted)

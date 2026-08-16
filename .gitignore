@@ -16,6 +16,20 @@ data/
 
 # 游戏原声素材（用户自备，版权不入库）
 voices/
+# 语音参考音频同样源自游戏素材，版权不入库（profile yaml 会入库，wav 不入；
+# 克隆后需自备 core/tts/voice_profiles/<name>/reference.wav）
+core/tts/voice_profiles/*/*.wav
+
+# 运行日志 / 诊断输出
+logs/
+TTS_FOREGROUND_LOG.txt
+tts_web/_*.log
+
+# TTS 诊断台的生成音频（可再生成，体积大）
+tts_web/outputs/
+
+# 用户个人文稿（仅本地测试素材）
+tts_web/user_essay.txt
 
 # 安装日志 / 备份
 install.log

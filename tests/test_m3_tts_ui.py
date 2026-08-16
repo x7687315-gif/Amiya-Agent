@@ -23,9 +23,8 @@ from ui.components.chat_area import ChatArea
 from ui.components.header import Header
 from ui.components.speaker import MuteState
 
-# 单元测试无真实 page：把 Control.update 替换成 no-op，避免「must be added to the
-# page first」的 RuntimeError。仅影响本测试模块的 UI 构造，不影响业务逻辑断言。
-ft.Control.update = lambda self: None  # type: ignore[assignment]
+# 注：ft.Control.update 的离线桩由 tests/conftest.py 的 autouse fixture 提供，
+# 此处不再做模块级替换（模块级替换会泄漏到同一 pytest 会话的其它测试模块）。
 
 # 一段合法的最小 wav 字节（RIFF/WAVE），供 player / FakeTTS 复用
 _WAV_BYTES = (

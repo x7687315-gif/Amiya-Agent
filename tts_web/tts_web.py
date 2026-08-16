@@ -16,10 +16,12 @@
     cut0（整段不切）调一次 /tts，再把各块 WAV 拼接成一个完整音频。这样每块都
     远小于模型单次上限，从根本上杜绝漏字。这是社区公认的分段合成 + 拼接方案。
 
-设计：
-    - 仅用 Python 标准库（http.server + http.client + wave + json + subprocess）。
+    设计：
+    - 后端仅用 Python 标准库；文本分块 / WAV 拼接与 core/tts/service.py 共享
+      同一份实现（core/tts/audio_utils.py，亦为纯标准库），防止两边漂移。
     - 前端（index.html）与后端同源，免去 CORS；后端再以服务端身份转发到 9880。
-    - /tts 用 streaming_mode=2 流式返回；拼接后的音频落盘到 outputs/。
+    - /tts 用流式返回（与 Agent 侧 TTSService 一致，streaming_mode=True）；
+      拼接后的音频落盘到 outputs/。
     - 核心合成逻辑抽成 synthesize_to_file()，Web 接口与离线脚本共用。
 
 配置与 Agent 的 core/tts/voice_profiles/assistant.yaml 保持一致，集中放在下面的 CONFIG。
@@ -30,21 +32,33 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
-import re
-import struct
 import subprocess
 import sys
-import threading
-import unicodedata
 import time
 import http.server
 import http.client
-import wave as _wave
-import io as _io
-import array
 from urllib.parse import urlparse, unquote
+
+# 共享工具模块（文本分块 / WAV 解析与拼接）：按文件路径直接加载，
+# 不走 core.tts 包导入——core/tts/__init__.py 会连带 import requests/yaml，
+# 而本诊断台要求任意 Python（含无第三方包的 GPT-SoVITS runtime）可跑。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PROJ_ROOT = os.path.dirname(_HERE)
+_UTILS_PATH = os.path.join(_PROJ_ROOT, "core", "tts", "audio_utils.py")
+_spec = importlib.util.spec_from_file_location("assistant_tts_audio_utils", _UTILS_PATH)
+if _spec is None or _spec.loader is None:
+    raise ImportError(f"无法加载共享工具模块: {_UTILS_PATH}")
+audio_utils = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(audio_utils)
+
+chunk_text = audio_utils.chunk_text
+clean_invisible = audio_utils.clean_invisible
+has_speech = audio_utils.has_speech
+wav_params_and_pcm = audio_utils.wav_params_and_pcm
+concat_chunks_wav = audio_utils.concat_chunks_wav
 
 # ============================ CONFIG（与 assistant.yaml 对齐）============================
 TTS_HOST = "127.0.0.1"
@@ -56,8 +70,8 @@ PROMPT_TEXT = "用户，你在忙吗？"          # 参考音频的准确文字�
 PROMPT_LANG = "zh"
 DEFAULT_TEXT_LANG = "zh"
 
-# 长文本分块参数
-MAX_CHARS = 50                            # 每块最多字数（≤50 远小于模型单次推理上限，避免漏字）
+# 长文本分块参数（MAX_CHARS 与共享模块保持同源，避免两处再漂移）
+MAX_CHARS = audio_utils.MAX_CHARS
 PER_CHUNK_SPLIT = "cut0"                  # 单块即单段，禁止 API 内部再切分（防 cut5 仍漏字）
 
 # ffmpeg：仅 MP4 输出需要
@@ -68,9 +82,6 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 INDEX_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 os.makedirs(OUT_DIR, exist_ok=True)
-
-# 线程锁：避免同一时刻两个请求同时写 outputs（文件名带毫秒+线程，基本不会撞）
-_lock = threading.Lock()
 # ===================================================================================
 
 
@@ -97,115 +108,15 @@ def _emit(wfile, obj) -> None:
         pass
 
 
-# ---------- 文本清洗：去掉不可见字符、判定是否可合成 ----------
-# 从网页/文档复制的文本常夹带零宽空格（\u200b）、零宽连字符（\u200c/\u200d）、
-# 字节序标记（\ufeff）等不可见字符；这些字符单独成块时 TTS 会返回 0 字节空音频，
-# 导致整段合成中断。这里在分块前统一清洗，并在分块后丢弃纯标点/空块。
-_INVISIBLE = set("\u200b\u200c\u200d\ufeff")
-_SPEECH_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaffA-Za-z0-9]")
-
-
-def _clean_invisible(text: str) -> str:
-    """去掉零宽空格/连字符、字节序标记等不可见控制字符（保留正常换行/制表符）。"""
-    out = []
-    for ch in text:
-        if ch in _INVISIBLE:
-            continue
-        cat = unicodedata.category(ch)
-        if cat in ("Cc", "Cf") and ch not in "\n\t\r":
-            continue
-        out.append(ch)
-    return "".join(out)
-
-
-def _has_speech(text: str) -> bool:
-    """文本是否含可朗读字符（CJK/字母/数字）。纯标点/空串返回 False。"""
-    return bool(_SPEECH_RE.search(text))
-
-
-def chunk_text(text: str, max_chars: int = MAX_CHARS) -> list:
-    """长文本分块（客户端侧，避免模型单次推理截断漏字）。
-
-    策略：
-        1) 按句末标点（。！？；…换行）断句，保留标点；
-        2) 超长句按逗号/顿号/冒号【贪心】切分——尽量把相邻的短分句并成一块，
-           只在「不并就会超过 max_chars」时才断；避免每遇一个逗号就切一刀
-           （那种切法会在句中插入大量不必要的接缝，听起来一顿一顿）；
-        3) 仍超长则按长度硬切；
-        4) 合并 <4 字的过短碎片到前一段（前段非句末时），避免模型读错。
-    每块 ≤ max_chars 字。
-    """
-    import re
-    text = _clean_invisible(text.strip())   # 去掉零宽空格/字节序标记等不可见字符
-    if not text:
-        return []
-
-    out = []
-    # 1) 句末标点断句（保留标点）
-    for raw in re.split(r"(?<=[。！？!?；;…\n])", text):
-        s = raw.strip()
-        if not s:
-            continue
-        if len(s) <= max_chars:
-            out.append(s)
-            continue
-        # 2) 超长句：贪心合并逗号/顿号/冒号切分点
-        buf = ""
-        for sub in re.split(r"(?<=[，,、：:])", s):
-            sub = sub.strip()
-            if not sub:
-                continue
-            if not buf:
-                buf = sub
-            elif len(buf) + len(sub) <= max_chars:
-                buf = buf + sub          # 并成一块，减少接缝
-            else:
-                out.append(buf)
-                buf = sub
-        if buf:
-            out.append(buf)
-
-    # 3) 仍超长（内部无逗号可用的长串）按长度硬切
-    hard = []
-    for c in out:
-        if len(c) <= max_chars:
-            hard.append(c)
-        else:
-            for i in range(0, len(c), max_chars):
-                hard.append(c[i:i + max_chars])
-
-    # 4) 合并过短碎片到前一段
-    merged = []
-    for c in hard:
-        if (merged
-                and len(c) < 4
-                and merged[-1][-1] not in "。！？!?；;…"
-                and len(merged[-1]) + len(c) <= max_chars + 4):
-            merged[-1] = merged[-1] + c
-        else:
-            merged.append(c)
-
-    # 5) 清理：丢弃空块；纯标点/不可见块并入上一块（否则 TTS 返回空音频导致整段中断）
-    final = []
-    for c in merged:
-        c = _clean_invisible(c)
-        if not _has_speech(c):
-            if final:
-                final[-1] = final[-1] + c
-            continue
-        final.append(c)
-    return final
-
-
 def _fetch_chunk_wav(text_chunk: str, lang: str, max_retry: int = 3) -> bytes:
     """对单块文本调一次 /tts（cut0 单段），返回完整 WAV 字节。
 
-    GPT-SoVITS 在 streaming_mode=2 下偶发返回 200 但 body 为空（0 字节），
+    GPT-SoVITS 在流式模式下偶发返回 200 但 body 为空（0 字节），
     多见于模型刚 ready / GPU 忙 / 短文本。此处对“空响应”做指数退避重试，
     避免单个瞬态失败让整段长文本合成中断。
     """
     # 无效输入（纯标点/空/不可见字符）不调用 TTS，也不重试，直接返回空字节交由上层跳过
-    if not _has_speech(_clean_invisible(text_chunk)):
+    if not has_speech(clean_invisible(text_chunk)):
         return b""
     payload = {
         "text": text_chunk,
@@ -214,7 +125,7 @@ def _fetch_chunk_wav(text_chunk: str, lang: str, max_retry: int = 3) -> bytes:
         "prompt_text": PROMPT_TEXT,
         "prompt_lang": PROMPT_LANG,
         "media_type": "wav",
-        "streaming_mode": 2,                  # 真·流式；这里直接 read() 收全量
+        "streaming_mode": True,               # 与 Agent 侧 TTSService 一致
         "batch_size": 1,
         "text_split_method": PER_CHUNK_SPLIT,  # 单块即单段
     }
@@ -251,114 +162,6 @@ def _fetch_chunk_wav(text_chunk: str, lang: str, max_retry: int = 3) -> bytes:
         break
     # 重试耗尽仍为空响应
     raise RuntimeError(f"重试 {max_retry} 次后仍拿到空音频: {last_err}")
-
-
-def _wav_params_and_pcm(raw: bytes):
-    """解析标准 WAV：用 wave 取声道/采样率/位深，但 PCM 直接取 data 子块之后。
-
-    GPT-SoVITS streaming_mode=2 返回的 WAV，其 header 里的 data size 常为占位值(0)，
-    wave.readframes 会据此返回 0 帧。因此 PCM 改为直接从 'data' 子块后读取真实音频。
-    """
-    w = _wave.open(_io.BytesIO(raw), "rb")
-    params = w.getparams()
-    w.close()
-    idx = raw.find(b"data")
-    if idx < 0:
-        raise ValueError("WAV 缺少 data 子块")
-    data_size = struct.unpack("<I", raw[idx + 4:idx + 8])[0]
-    pcm_start = idx + 8
-    if 0 < data_size <= len(raw) - pcm_start:
-        pcm = raw[pcm_start:pcm_start + data_size]
-    else:
-        pcm = raw[pcm_start:]            # 占位 size 异常时取剩余全部
-    return params, pcm
-
-
-# ---------- 接缝平滑：淡入淡出 + 静音归一 + 可控停顿 ----------
-# 逐块独立合成后若直接拼接 PCM，块间会产生硬切/爆音/突兀换气（每段都被模型当成
-# 独立成句重新起音）。这里在拼接前对每块做：裁掉首尾多余静音 → 首尾各做短淡变 →
-# 按边界类型插入可控停顿，使接缝变成自然的换气/标点停顿，且不增删任何文字音频。
-_SENT_END = set("。！？!?；;…")
-_PAUSE_SENT = 0.18       # 句末（。！？…）后的停顿（秒）
-_PAUSE_CLAUSE = 0.09     # 分句（，、：）后的停顿（秒）
-_FADE = 0.02             # 每块首尾淡入淡出时长（秒）
-_TRIM_TAIL = 0.025       # 裁掉尾部静音后保留的极小尾（秒）
-_SIL_THR = 0.012         # 静音判定阈值（相对峰值）
-
-
-def _pcm_to_int(pcm: bytes, sampwidth: int) -> "array.array":
-    return array.array({1: "b", 2: "h", 4: "i"}[sampwidth], pcm)
-
-
-def _int_to_pcm(samples: "array.array", sampwidth: int) -> bytes:
-    return samples.tobytes()
-
-
-def _trim_silence(samples: "array.array", sr: int) -> "array.array":
-    n = len(samples)
-    if n == 0:
-        return samples
-    peak = max((abs(x) for x in samples), default=0) or 1
-    th = _SIL_THR * peak
-    i = 0
-    while i < n and abs(samples[i]) <= th:
-        i += 1
-    j = n - 1
-    while j >= 0 and abs(samples[j]) <= th:
-        j -= 1
-    if j < i:
-        return samples[0:0]
-    tail = int(_TRIM_TAIL * sr)
-    return samples[i: min(n, j + 1 + tail)]
-
-
-def _apply_fades(samples: "array.array", sr: int) -> "array.array":
-    n = len(samples)
-    k = int(_FADE * sr)
-    for t in range(min(k, n)):
-        if samples[t]:
-            samples[t] = int(round(samples[t] * (t / k)))
-        idx = n - 1 - t
-        if samples[idx]:
-            samples[idx] = int(round(samples[idx] * (t / k)))
-    return samples
-
-
-def _pause_samples(sr: int, sampwidth: int, sec: float) -> "array.array":
-    return array.array({1: "b", 2: "h", 4: "i"}[sampwidth], [0]) * int(sec * sr)
-
-
-def _build_wav(params, pcm: bytes) -> bytes:
-    buf = _io.BytesIO()
-    with _wave.open(buf, "wb") as wf:
-        wf.setnchannels(params.nchannels)
-        wf.setsampwidth(params.sampwidth)
-        wf.setframerate(params.framerate)
-        wf.writeframes(pcm)
-    return buf.getvalue()
-
-
-def _concat_chunks_wav(params, raw_chunks: list, texts: list) -> bytes:
-    """逐块 PCM 经静音归一 + 首尾淡变 + 按边界类型插入可控停顿后拼接。
-
-    只处理接缝处的静音/淡变/停顿，不增删任何文字对应的音频，故不会漏字。
-    """
-    sr = params.framerate
-    sw = params.sampwidth
-    combined = None
-    for idx, (raw, txt) in enumerate(zip(raw_chunks, texts)):
-        _, pcm = _wav_params_and_pcm(raw)
-        s = _pcm_to_int(pcm, sw)
-        s = _trim_silence(s, sr)
-        s = _apply_fades(s, sr)
-        if combined is None:
-            combined = s
-        else:
-            prev = texts[idx - 1]
-            sec = _PAUSE_SENT if (prev and prev[-1] in _SENT_END) else _PAUSE_CLAUSE
-            combined.extend(_pause_samples(sr, sw, sec))
-            combined.extend(s)
-    return _build_wav(params, _int_to_pcm(combined, sw))
 
 
 def synthesize_to_file(text: str, lang: str = DEFAULT_TEXT_LANG, fmt: str = "wav",
@@ -399,7 +202,7 @@ def synthesize_to_file(text: str, lang: str = DEFAULT_TEXT_LANG, fmt: str = "wav
             continue
         try:
             if params0 is None:
-                params0, _ = _wav_params_and_pcm(raw)
+                params0, _ = wav_params_and_pcm(raw)
             raw_list.append(raw)
             used_texts.append(ch)
         except Exception as exc:
@@ -425,7 +228,7 @@ def synthesize_to_file(text: str, lang: str = DEFAULT_TEXT_LANG, fmt: str = "wav
     _concat_n = len(used_texts)
     _emit(wfile, {"type": "stage", "stage": "pack",
                   "text": f"平滑拼接 {_concat_n} 段音频（淡入淡出 + 可控停顿）为完整 WAV"})
-    final_wav = _concat_chunks_wav(params0, raw_list, used_texts)
+    final_wav = concat_chunks_wav(params0, raw_list, used_texts)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     wav_name = f"assistant_{stamp}.wav"
     wav_path = os.path.join(OUT_DIR, wav_name)

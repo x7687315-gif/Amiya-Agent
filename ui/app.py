@@ -64,6 +64,13 @@ class AssistantApp:
         self.drawer: PersonaDrawer | None = None
         self._glow: ft.Container | None = None
         self._session_start: float = 0.0
+        # 语音链路默认值：保证 run() 之前访问这些属性也不崩（测试可注入替换）。
+        # tts 默认 None——未 run 就点朗读属异常路径，静默跳过而非 AttributeError。
+        self.mute_state = MuteState()
+        self.player = AudioPlayer()
+        self.tts: TTSService | None = None
+        self._memory = None
+        self._extract_callback = None
 
     def run(self, page: ft.Page) -> None:
         self.page = page
@@ -327,18 +334,22 @@ class AssistantApp:
 
         原则（M3）：语音失败 ≠ Agent 失败。合成或播放失败都静默跳过本条朗读。
         整个链路（网络合成 + 本地播放）都在后台线程跑（_speak_async 经 run_thread
-        调度），不阻塞 UI；AudioPlayer 内部再启独立 daemon 线程同步播放，避免
-        winsound.SND_ASYNC 在某些线程环境静默失效的问题。
+        调度），不阻塞 UI；AudioPlayer 内部用唯一工作线程按 FIFO 串行播放，
+        连点多个气泡不会互相截断。
         """
         if not text or not text.strip():
             return  # 空文本 / 纯空白：没有可朗读内容，跳过
+        if self.tts is None:
+            return  # run() 尚未完成：语音链路未就绪，静默跳过
         if self.mute_state is not None and self.mute_state.muted:
             return  # 全局静音：直接跳过，不发任何 TTS 请求
         logger.info("正在为文本请求助手语音：%s", text[:40])
         result = self.tts.synthesize(text=text, voice="assistant", text_lang="zh")
+        if self.mute_state is not None and self.mute_state.muted:
+            return  # 合成期间被静音：结果作废，不播（网络往返 1-2s，存在窗口期）
         if result.success and result.audio is not None and getattr(result.audio, "data", b""):
             if self.player.play(result.audio):
-                logger.info("助手语音开始播放")
+                logger.info("助手语音已排队播放")
             else:
                 logger.warning("助手语音播放失败（winsound 不可用或音频无效）")
         else:
@@ -398,9 +409,11 @@ class AssistantApp:
             if not started:
                 self.chat_area.remove_thinking()
                 self.chat_area.add_assistant("（用户，我一时语塞了……）")
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("回复失败")
-            self.chat_area.add_error(f"通讯有些干扰，请稍后再试。{e}")
+            # 异常细节只进日志，不进 UI（用户看到固定话术即可，见 config 哲学：
+            # 既不把故障伪装成台词，也不把 stack 细节直接甩给用户）
+            self.chat_area.add_error("通讯有些干扰，请稍后再试。")
         finally:
             self.header.set_thinking(False)
             if self.persona_status is not None:

@@ -8,6 +8,9 @@
 # - reference.text 必须与参考音频内容「人工确认」完全一致：
 #   M1 已亲耳核对，原自动 ASR 的「看.」为误识别，正确文本是「用户，你在忙吗？」。
 # - reference.audio_path 相对本 yaml 所在目录解析。
+# - reference.wav 源自游戏素材，版权原因不入库（.gitignore 已排除），
+#   克隆仓库后需自行放回 assistant/reference.wav。
+# - api.host/port 必须与 start_assistant.bat 的 TTS_HOST/TTS_PORT 保持一致。
 
 name: assistant
 gpt_model: GPT_weights_v2Pro/助手-e15.ckpt

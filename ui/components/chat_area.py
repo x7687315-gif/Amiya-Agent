@@ -162,12 +162,22 @@ class ChatArea(ft.Container):
         self._scroll_if_auto()
 
     def clear(self) -> None:
-        """清空聊天区，回到空态。"""
+        """清空聊天区，回到空态。气泡销毁前先退订其静音回调，防订阅泄漏。"""
+        self._unsubscribe_mute(self._list.controls)
         self._has_messages = False
         self._thinking_indicator = None
         self._list.controls.clear()
         self._list.controls.append(self._empty_state)
         self._list.update()
+
+    @staticmethod
+    def _unsubscribe_mute(controls) -> None:
+        """对列表中的气泡退订 MuteState（气泡工厂把订阅句柄挂在控件上）。"""
+        for ctrl in controls:
+            state = getattr(ctrl, "_mute_state", None)
+            cb = getattr(ctrl, "_mute_cb", None)
+            if state is not None and cb is not None:
+                state.unsubscribe(cb)
 
     def _on_scroll(self, e: ft.OnScrollEvent) -> None:
         if e.max_scroll_extent is None:
