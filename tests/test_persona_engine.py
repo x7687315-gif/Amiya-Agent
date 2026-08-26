@@ -18,8 +18,8 @@ from core.persona.relationship import RelationshipManager
 def test_old_imports_still_work():
     assert Persona is not None
     p = load_persona()
-    assert p.name == "助手"
-    assert p.address == "用户"
+    assert p.name == "示例助手"
+    assert p.address == "你"
 
 
 def test_persona_manager_importable():

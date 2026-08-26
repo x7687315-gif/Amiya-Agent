@@ -82,8 +82,8 @@ def test_retriever_ranks_relevant_chunk_first():
     assert "用户" in hits[0].text, "最相关应是关系片段"
     assert hits[0].channels.get("keyword", 0) > 0
     assert "score" not in hits[0].channels  # channels 里只有 vector/keyword
-    # 片段不应排在最前
-    assert "" not in hits[0].text
+    # 最相关片段应有实际内容
+    assert hits[0].text.strip(), "最相关片段不应为空"
 
 
 def test_retriever_empty_corpus_returns_nothing():

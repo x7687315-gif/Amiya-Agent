@@ -20,7 +20,7 @@ from core.memory.embedder import (
 def test_tokenize_mixes_cjk_and_ascii():
     toks = tokenize("用户喜欢Cat")
     # 中文单字 + 相邻二字组，英文整词
-    assert "博" in toks and "士" in toks
+    assert "用" in toks and "户" in toks
     assert "用户" in toks  # 二字组比单字更有区分度
     assert "cat" in toks
 

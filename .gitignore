@@ -14,10 +14,9 @@ __pycache__/
 # 用户数据（对话记录 / 长期记忆 SQLite）
 data/
 
-# 游戏原声素材（用户自备，版权不入库）
-voices/
-# 语音参考音频同样源自游戏素材，版权不入库（profile yaml 会入库，wav 不入；
+# 语音参考音频（用户自备，版权不入库；profile yaml 会入库，wav 不入；
 # 克隆后需自备 core/tts/voice_profiles/<name>/reference.wav）
+voices/
 core/tts/voice_profiles/*/*.wav
 
 # 运行日志 / 诊断输出
@@ -38,3 +37,36 @@ install.log
 # IDE
 .idea/
 .vscode/
+
+# ---------------------------------------------------------------------------
+# 隐私 / 仅本地资产（公开发布前绝不可入库）
+# ---------------------------------------------------------------------------
+# 密钥与证书
+*.pem
+*.key
+*.p12
+*.token
+*.secret
+secrets/
+private/
+
+# 个人素材 / 私人皮肤（用户自备，含版权素材）
+personal_assets/
+personal_skins/
+
+# 模型权重（语音 / 嵌入等，体积大且多为版权或私有）
+models/
+weights/
+voice_models/
+voice_samples/
+
+# 记忆与数据库（含用户长期记忆 SQLite）
+memory/
+*.db
+*.sqlite
+*.sqlite3
+
+# 环境配置（含 API Key，已由 .env 覆盖但双保险）
+.env.*
+!.env.example
+

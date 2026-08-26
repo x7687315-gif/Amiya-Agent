@@ -9,7 +9,7 @@ def test_system_contains_persona_and_examples():
     assert "用户" in sys_p
     assert "【助手的视角与价值观】" in sys_p
     # few-shot 范例应进入系统提示词，强化语感
-    assert "用户：用户，今天辛苦了。" in sys_p
+    assert "助手：" in sys_p and "用户：" in sys_p
     # 稳定性护盾
     assert "不要脱离助手" in sys_p
 

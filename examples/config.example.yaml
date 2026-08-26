@@ -1,0 +1,28 @@
+# 配置示例（config example）
+# 实际配置通过环境变量或 .env 提供；下方为字段说明与示例值。
+# 注意：DEEPSEEK_API_KEY 等密钥只放在 .env（已被 gitignore），绝不要提交。
+
+DEEPSEEK_API_KEY: ""            # 填入你的 DeepSeek API Key
+DEEPSEEK_BASE_URL: "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL: "deepseek-chat"
+TEMPERATURE: 0.9
+MAX_TOKENS: 1024
+TIMEOUT: 30
+
+HISTORY_LIMIT: 20              # 短期记忆保留轮数上限
+MEMORY_ENABLED: 1              # 1=启用长期记忆(SQLite, 本机)；0=纯内存
+MEMORY_DB_PATH: "data/agent.db"
+
+EMBEDDING_BACKEND: "auto"      # auto / local / hashing
+EMBEDDING_MODEL: "BAAI/bge-small-zh-v1.5"
+EMBEDDING_DEVICE: "cpu"
+MEMORY_TOP_K: 5
+
+KNOWLEDGE_DIR: "knowledge"
+KNOWLEDGE_TOP_K: 4
+
+TTS_VOICE: "assistant"             # core/tts/voice_profiles/<name>.yaml
+TTS_TEXT_LANG: "zh"
+TTS_ENABLED: 1                 # 1=启用朗读；0=彻底关闭（顶栏 🔊 隐藏、不发起合成）
+
+UI_SKIN: "example"             # auto=跟随情绪；或具体皮肤 id（如 example）

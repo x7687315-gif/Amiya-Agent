@@ -189,32 +189,27 @@ def test_apply_skin_writes_singleton_and_syncs_emotions():
 
 
 def test_real_phase1_skins_present():
-    """集成：真实 resources/skins 下应有 Phase 1 的 4 套，且资源齐全。"""
+    """集成：真实 resources/skins 下应有 example 皮肤，且资源齐全。"""
     m = SkinManager()
     m.load_skins(DEFAULT_SKINS_DIR)
-    assert {"starry", "warm", "winter", "pale"} <= set(m.registry)
-    for sid in ("starry", "warm", "winter", "pale"):
-        s = m.registry[sid]
-        assert s.avatar_path.is_file(), sid
-        assert s.background_path.is_file(), sid
-        assert 0.0 < s.scrim_opacity <= 1.0, sid
+    assert "example" in set(m.registry)
+    s = m.registry["example"]
+    assert s.avatar_path.is_file(), "example"
+    assert s.background_path.is_file(), "example"
+    assert 0.0 < s.scrim_opacity <= 1.0, "example"
 
 # ---------------------------------------------------------------------------
 # Phase 2 / Phase 3（2026-08-17 收尾）：磁盘 6 套皮肤 + 选肤持久化 + 抽屉外观区块
 # ---------------------------------------------------------------------------
 
 
-def test_real_skins_on_disk_six_total():
-    """Phase 3 验收：磁盘上 6 套皮肤全部可加载；sakura/sunset 仅手动可选。"""
+def test_example_skin_on_disk():
+    """验收：磁盘上应有 example 皮肤（公开演示用），且仅此一套公开皮肤。"""
     m = SkinManager()
     m.load_skins()  # 默认目录 resources/skins
     ids = set(m.registry)
-    assert {"starry", "warm", "winter", "pale", "sakura", "sunset"} <= ids
-    assert m.registry["sakura"].is_manual_only is True
-    assert m.registry["sunset"].is_manual_only is True
-    # 情绪映射的 4 套不是 manual_only（auto 模式可达）
-    for sid in ("starry", "warm", "winter", "pale"):
-        assert m.registry[sid].is_manual_only is False
+    assert "example" in ids
+    assert m.registry["example"].is_manual_only is False
 
 
 def test_persist_ui_skin_replaces_existing_line(tmp_path):
@@ -305,9 +300,9 @@ def test_bootstrap_context_carries_skins_for_drawer(tmp_path):
     """SkinContext.skins 把注册表带给 PersonaDrawer（Phase 2 接线依赖）。"""
     m = SkinManager()
     m.load_skins()
-    ctx = m.bootstrap("starry", apply=False)
+    ctx = m.bootstrap("example", apply=False)
     ids = {s.id for s in ctx.skins}
-    assert {"starry", "sakura", "sunset"} <= ids
+    assert "example" in ids
 
 
 # ---------------------------------------------------------------------------

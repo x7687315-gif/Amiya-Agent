@@ -1,0 +1,16 @@
+{
+  "id": "example",
+  "name": "示例皮肤",
+  "description": "公开演示用的中性占位皮肤（头像与壁纸同源占位图）。替换为你的合法授权素材即可。",
+  "colors": {
+    "PRIMARY": "#3A6EA5",
+    "PRIMARY_DARK": "#2A4F78",
+    "PRIMARY_LIGHT": "#6E9BCB",
+    "PRIMARY_SOFT": "#E8F0F8",
+    "BRIDGE_ACCENT": "#5BA0C9"
+  },
+  "scrim_opacity": 0.8,
+  "emotion": null,
+  "is_manual_only": false,
+  "dominant_color": "#3A6EA5"
+}
