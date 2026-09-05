@@ -48,8 +48,24 @@ from ui.components.speaker import MuteState  # noqa: E402
 from ui.components.split_handle import SplitHandle  # noqa: E402
 from ui.components.tts_status import TTSStatusBanner, TTSStatusState  # noqa: E402
 from ui.design.avatar_provider import AvatarProvider  # noqa: E402
-from ui.design.skin import SkinContext, bootstrap_skin  # noqa: E402
-from ui.theme import ALIGN_CENTER, ALIGN_TOP_CENTER, c, layout, anim  # noqa: E402
+from ui.design.skin import SKIN_CANVAS_RATIO, SkinContext, bootstrap_skin  # noqa: E402
+from ui.theme import (  # noqa: E402
+    ALIGN_CENTER,
+    ALIGN_CENTER_LEFT,
+    ALIGN_TOP_CENTER,
+    c,
+    layout,
+    anim,
+)
+from ui.layout_metrics import (  # noqa: E402
+    chat_column_width,
+    chat_text_width,
+    clamp_left_width,
+    clamp_pair,
+    clamp_right_width,
+    window_height_of,
+    window_width_of,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("assistant")
@@ -73,6 +89,7 @@ class AssistantApp:
         self.date_nav: DateNav | None = None
         self.memory_panel: MemoryPanel | None = None
         self.middle: ft.Column | None = None
+        self._bg_image: "ft.Image | None" = None  # P4：等高左锚的壁纸控件
         self.drawer: PersonaDrawer | None = None
         self._session_start: float = 0.0
         # 语音链路默认值：保证 run() 之前访问这些属性也不崩（测试可注入替换）。
@@ -204,8 +221,14 @@ class AssistantApp:
         self._tts_lang = settings.tts_text_lang
         self._settings = settings
         # 可调分栏：从配置恢复（越界值钳回合法区间）
-        self._left_width = max(180, min(560, int(settings.ui_left_width)))
-        self._right_width = max(220, min(620, int(settings.ui_right_width)))
+        # P2：按**默认窗口宽**重校一次——换显示器/窗口变小后，上次持久化的布局
+        # 可能已非法（两侧之和超出窗口，聊天区被压死）。此时 page 尚未挂载，
+        # 故以 layout.WINDOW_WIDTH 为基准；真实窗口宽就绪后 _setup_page 会再校一次。
+        self._left_width, self._right_width = clamp_pair(
+            int(settings.ui_left_width),
+            int(settings.ui_right_width),
+            layout.WINDOW_WIDTH,
+        )
         # 静音即刻停掉正在播/排队的语音（用户预期：按下静音，世界安静）
         self.mute_state.subscribe(
             lambda muted: self.player.stop_all() if muted else None
@@ -321,6 +344,46 @@ class AssistantApp:
         self.page.padding = 0
         self.page.spacing = 0
         self.page.font_family = "Microsoft YaHei"
+        # P2：窗口宽就绪后对持久化栏宽再校一次（换显示器后 .env 里可能存着
+        # 按旧窗口算出的非法布局）。
+        self._left_width, self._right_width = clamp_pair(
+            self._left_width, self._right_width, layout.WINDOW_WIDTH
+        )
+        # P1/P2/P7：窗口尺寸变化是「聊天区宽度」重算的时机源——拖手柄/换肤重建
+        # 之外的第 3 个同步时机。
+        self.page.on_resize = self._on_window_resize
+
+    def _apply_bg_size(self) -> None:
+        """P4：壁纸「等高 + 左锚」尺寸——高=窗口高，宽=画布比例×高。
+
+        Image 的 fit 无法改变裁切锚点（无 alignment），所以由 app 侧显式给出
+        与画布同比例的盒子，让 COVER 不产生裁切；窗口 resize 后重算即可保持
+        左缘贴合。
+        """
+        img = self._bg_image
+        if img is None or self.page is None:
+            return
+        height = window_height_of(self.page) or layout.WINDOW_HEIGHT
+        img.width = int(height * SKIN_CANVAS_RATIO)
+        img.height = int(height)
+
+    def _on_window_resize(self, _e=None) -> None:
+        """窗口尺寸变化：重校分栏钳制，并刷新气泡宽度上限/让位边距。"""
+        if self.page is None:
+            return
+        width = self._window_width()
+        if width <= 0:
+            return
+        self._apply_bg_size()  # P4：壁纸等高左锚随之重算
+        # 顺序敏感：先落新左，再以**新左**为基准钳右（否则窄窗口下两侧
+        # 可能同时保持旧值、聊天区被压死）。
+        self._left_width = clamp_left_width(self._left_width, self._right_width, width)
+        self._right_width = clamp_right_width(self._right_width, self._left_width, width)
+        if self.persona_status is not None:
+            self.persona_status.width = int(self._left_width)
+        if self.memory_panel is not None:
+            self.memory_panel.width = int(self._right_width)
+        self._sync_chat_width()
 
     def _build_ui(self, persona) -> None:
         assert self.page is not None
@@ -408,8 +471,21 @@ class AssistantApp:
         bg_layers.append(ft.Container(bgcolor=dominant, expand=True))
         bg_path = self._skin_ctx.background_path if self._skin_ctx else None
         if bg_path and os.path.isfile(str(bg_path)):
+            # P4（docs/20_UI_ADAPTATION_ISSUES.md）：原先 ft.Image(fit=COVER) 的裁切
+            # 锚点是**居中**（0.86.5 的 Image 无 alignment），窗口比画布更高瘦时左右
+            # 被等量裁掉——左置壁纸本体被吃，右侧裁掉的却本来就是延伸色。
+            # 改为「等高 + 左锚」：给 Image 显式尺寸（高=窗口高，宽=画布比例×高），
+            # 再用容器 ALIGN_CENTER_LEFT 定位。溢出窗口右缘的部分本就是延伸色，
+            # 被窗口自然截断，无需 clip；窗口比画布更宽时右侧由底层 dominant 色板
+            # 无缝补齐。左缘自此永不动，也不需要重烘画布或升级 flet。
+            self._bg_image = ft.Image(src=str(bg_path), fit=ft.BoxFit.COVER)
+            self._apply_bg_size()
             bg_layers.append(
-                ft.Image(src=str(bg_path), fit=ft.BoxFit.COVER, expand=True)
+                ft.Container(
+                    content=self._bg_image,
+                    alignment=ALIGN_CENTER_LEFT,
+                    expand=True,
+                )
             )
             bg_layers.append(
                 ft.Container(
@@ -422,6 +498,8 @@ class AssistantApp:
         root = ft.Stack([bg, ft.Column([self.header, body], expand=True)], expand=True)
 
         self.page.add(root)
+        # 首帧就把聊天区宽度同步给气泡（P1/P7）
+        self._sync_chat_width()
 
         # 错峰入场
         assert self.page is not None
@@ -537,22 +615,52 @@ class AssistantApp:
             self.tts_state.set_busy(False)
 
     # ----- 可调分栏（聊天区尺寸/位置手动调节） -----
-    LEFT_MIN, LEFT_MAX = 180, 560
-    RIGHT_MIN, RIGHT_MAX = 220, 620
+    # P2：上限不再是静态常量（原 LEFT_MAX+RIGHT_MAX=560+620=1180 恰为默认窗口宽，
+    # 两边拉满会把聊天区挤成 0），改为按当前窗口宽动态推导，保证聊天区始终
+    # ≥ CHAT_MIN_WIDTH(420)。计算收敛在 ui/layout_metrics.py（纯函数，可测）。
+
+    def _window_width(self) -> int:
+        """当前窗口宽；取不到时回退到布局默认宽（离线/未挂载场景）。"""
+        width = window_width_of(self.page) if self.page is not None else 0
+        return width if width > 0 else layout.WINDOW_WIDTH
+
+    def _sync_chat_width(self) -> None:
+        """把「聊天区可用宽度」同步给各组件（P1/P3/P7 的唯一宽度基准）。
+
+        - chat_area 收**文本宽度**（气泡上限/边距的基准，已扣 ListView padding）
+        - date_nav 收**栏宽**（决定是否切紧凑形态）
+        """
+        if self.chat_area is None:
+            return
+        width = self._window_width()
+        col_w = chat_column_width(width, self._left_width, self._right_width)
+        self.chat_area.set_chat_text_width(chat_text_width(width, self._left_width, self._right_width))
+        if self.date_nav is not None:
+            self.date_nav.set_width(col_w)
 
     def _drag_left(self, delta: float) -> None:
         """左栏手柄：向右拖加宽左栏（聊天区右移给壁纸人物让位）。"""
-        self._left_width = max(self.LEFT_MIN, min(self.LEFT_MAX, self._left_width + delta))
+        self._left_width = clamp_left_width(
+            self._left_width + delta,
+            right_width=self._right_width,
+            window_width=self._window_width(),
+        )
         if self.persona_status is not None:
             self.persona_status.width = int(self._left_width)
             self._safe_ctrl_update(self.persona_status)
+        self._sync_chat_width()
 
     def _drag_right(self, delta: float) -> None:
         """右栏手柄：向右拖收窄右栏（聊天区变宽）。"""
-        self._right_width = max(self.RIGHT_MIN, min(self.RIGHT_MAX, self._right_width - delta))
+        self._right_width = clamp_right_width(
+            self._right_width - delta,
+            left_width=self._left_width,
+            window_width=self._window_width(),
+        )
         if self.memory_panel is not None:
             self.memory_panel.width = int(self._right_width)
             self._safe_ctrl_update(self.memory_panel)
+        self._sync_chat_width()
 
     def _persist_layout(self) -> None:
         """拖完持久化栏宽（下次启动保持）。"""

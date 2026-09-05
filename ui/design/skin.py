@@ -35,6 +35,12 @@ DEFAULT_AVATAR_PATH = _ROOT / "resources" / "avatar" / "default.png"
 
 DEFAULT_SKIN_ID = "starry"
 
+# 壁纸画布规格：烘焙为 2560×1600「左置画布」——左侧为壁纸本体，右缘即延伸色
+# （dominant_color），接缝天然无缝。app 侧按此比例做「等高 + 左锚」布局
+# （docs/20_UI_ADAPTATION_ISSUES.md P4）：窗口再怎么高瘦，被裁的都只是右侧
+# 延伸区，壁纸本体（左缘）永不动。重烘画布时若改了尺寸，同步改这里。
+SKIN_CANVAS_RATIO = 2560 / 1600
+
 # 情绪 → 皮肤 静态映射（sakura / sunset 为手动皮肤，不在此表）。
 # 想调整映射，改这里或各 skin.json 的 emotion 字段即可，不动核心逻辑。
 EMOTION_TO_SKIN = {

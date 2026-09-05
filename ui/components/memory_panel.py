@@ -134,11 +134,16 @@ class MemoryPanel(ft.Container):
             for type_, label in CENTER_CATEGORIES
         ]
 
+        # P6：滚动列末尾补一个尾垫——最后一个 Section 自带 bottom padding 会被
+        # ListView 的可视边界吃掉，视觉上"最后一张卡片贴死面板底缘"。
         self.content = ft.Column(
             [header, ft.Container(height=sp.XS), candidate_section, ft.Container(height=sp.MD),
-             my_memory_label, ft.Container(height=sp.XS), *my_memory_sections],
+             my_memory_label, ft.Container(height=sp.XS), *my_memory_sections,
+             ft.Container(height=sp.SM)],
             spacing=sp.LG,
-            scroll=ft.ScrollMode.AUTO,
+            # P6：AUTO 在 Windows 上是 overlay 式（静止时隐藏），用户看不出
+            # "下面还有没有内容"。改 ALWAYS 常显——可供性比视觉干净重要。
+            scroll=ft.ScrollMode.ALWAYS,
             expand=True,
         )
 

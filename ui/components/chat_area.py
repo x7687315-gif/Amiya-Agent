@@ -36,6 +36,8 @@ class ChatArea(ft.Container):
         self._auto_scroll = True
         self._thinking_indicator: ft.Control | None = None
         self._empty_state = EmptyState(persona, avatar_provider=avatar_provider)
+        # 聊天区文本可用宽度（由 app 层按窗口/分栏计算后注入；0 = 未知，不限宽）
+        self._chat_text_width: float = 0
 
         self._scroll_btn = self._build_scroll_btn()
         self._list = ft.ListView(
@@ -95,6 +97,26 @@ class ChatArea(ft.Container):
     async def _async_scroll(self, duration: int) -> None:
         await self._list.scroll_to(offset=-1, duration=duration)
 
+    def set_chat_text_width(self, width: float) -> None:
+        """更新聊天区文本可用宽度（拖手柄 / 窗口 resize 时由 app 层调用）。
+
+        只回写气泡的**外层容器宽度**，不重建气泡——重建会打断流式输出，
+        并且要重新挂 🔊 的静音/忙碌订阅，风险与收益不成比例。
+        """
+        try:
+            width = max(0.0, float(width or 0))
+        except (TypeError, ValueError):
+            return
+        if width == self._chat_text_width:
+            return
+        self._chat_text_width = width
+        for ctrl in self._list.controls:
+            ChatBubble.apply_width(ctrl, width)
+        try:
+            self._list.update()
+        except Exception:  # noqa: BLE001 - 未挂载时忽略
+            pass
+
     def _ensure_message_list(self) -> None:
         """第一条消息加入时移除空态。"""
         if not self._has_messages:
@@ -104,7 +126,7 @@ class ChatArea(ft.Container):
     def add_user(self, text: str) -> None:
         """添加用户消息并显示思考态覆盖层。"""
         self._ensure_message_list()
-        self._append_fade(ChatBubble.user(text))
+        self._append_fade(ChatBubble.user(text, available_width=self._chat_text_width))
         self._thinking_indicator = ThinkingOverlay(self._avatar_provider)
         self._list.controls.append(self._thinking_indicator)
         self._list.update()
@@ -126,6 +148,7 @@ class ChatArea(ft.Container):
             on_speak=self._on_speak,
             mute_state=self._mute_state,
             tts_state=self._tts_state,
+            available_width=self._chat_text_width,
         )
         self._append_fade(bubble)
         self._scroll_if_auto(layout.SCROLL_DURATION_FAST)
@@ -158,6 +181,7 @@ class ChatArea(ft.Container):
                 on_speak=self._on_speak,
                 mute_state=self._mute_state,
                 tts_state=self._tts_state,
+                available_width=self._chat_text_width,
             )
         )
         self._scroll_if_auto()
@@ -188,7 +212,9 @@ class ChatArea(ft.Container):
                 if not content:
                     continue
                 if role == "user":
-                    self._list.controls.append(ChatBubble.user(content))
+                    self._list.controls.append(
+                        ChatBubble.user(content, available_width=self._chat_text_width)
+                    )
                 elif role == "assistant":
                     self._list.controls.append(
                         ChatBubble.assistant(
@@ -197,6 +223,7 @@ class ChatArea(ft.Container):
                             on_speak=self._on_speak,
                             mute_state=self._mute_state,
                             tts_state=self._tts_state,
+                            available_width=self._chat_text_width,
                         )
                     )
         self._list.update()
@@ -237,7 +264,7 @@ class ChatArea(ft.Container):
         """添加系统错误提示。"""
         self._ensure_message_list()
         self._remove_thinking()
-        self._append_fade(ChatBubble.error(text))
+        self._append_fade(ChatBubble.error(text, available_width=self._chat_text_width))
         self._scroll_if_auto()
 
     def clear(self) -> None:

@@ -13,6 +13,7 @@ import flet as ft
 # 便捷对齐常量（Flet 0.86 不再提供 ft.alignment.center 等预设）
 ALIGN_CENTER = ft.alignment.Alignment(0, 0)
 ALIGN_CENTER_RIGHT = ft.alignment.Alignment(1, 0)
+ALIGN_CENTER_LEFT = ft.alignment.Alignment(-1, 0)  # 壁纸左锚用（docs/20 P4）
 ALIGN_TOP_CENTER = ft.alignment.Alignment(0, -1)
 
 

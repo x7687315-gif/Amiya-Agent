@@ -526,18 +526,26 @@ class _Panel:
 
 
 def test_app_drag_left_right_clamping(monkeypatch):
+    """P2（docs/20_UI_ADAPTATION_ISSUES.md）：钳制上限按窗口宽**动态推导**，
+    不再是静态 560/620（旧上限之和 1180 恰为默认窗宽，两边拉满会挤死聊天区）。
+
+    测试无 page → _window_width() 回退 layout.WINDOW_WIDTH=1180。
+    动态上限 = 窗口 − 对侧 − 2×手柄(18) − 聊天区保底(420)。
+    """
     from ui.app import AssistantApp
 
     app = AssistantApp()
     app.persona_status = _Panel()
     app.memory_panel = _Panel()
+    # 右栏 300 时左栏动态上限 = 1180 − 300 − 18 − 420 = 442
     app._left_width = 500
-    app._drag_left(200)  # 500+200 → 钳到 560
-    assert app._left_width == 560 and app.persona_status.width == 560
-    app._drag_left(-1000)  # 钳到下限 180
-    assert app._left_width == 180
+    app._drag_left(200)  # 500+200=700 → 钳到动态上限 442（聊天区保住 420）
+    assert app._left_width == 442 and app.persona_status.width == 442
+    app._drag_left(-1000)  # 钳到下限 220（P5：下限由 180 提到 220）
+    assert app._left_width == 220
+    # 右栏：左栏 220 时动态上限 = 1180 − 220 − 18 − 420 = 522
     app._right_width = 250
-    app._drag_right(-100)  # 向左拖 → 右栏加宽 350
+    app._drag_right(-100)  # 向左拖 → 右栏加宽 350（< 522，合法）
     assert app._right_width == 350 and app.memory_panel.width == 350
     app._drag_right(9999)  # 钳到下限 220
     assert app._right_width == 220

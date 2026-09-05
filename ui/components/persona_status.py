@@ -79,8 +79,25 @@ class PersonaStatusPanel(ft.Container):
                 make_avatar(self._avatar_provider, state_key="calm", radius=26, text_size=18),
                 ft.Column(
                     [
-                        ft.Text(self.persona.name, color=c.TEXT_PRIMARY, size=t.TITLE, weight=ft.FontWeight.BOLD),
-                        ft.Text(self.persona.title or "本地", color=c.TEXT_SECONDARY, size=t.TINY),
+                        # P5：左栏收窄时禁止「一字一行」竖排——名字/称号单行省略，
+                        # 全文走 tooltip（ft.Text 实测支持 overflow/max_lines）。
+                        ft.Text(
+                            self.persona.name,
+                            color=c.TEXT_PRIMARY,
+                            size=t.TITLE,
+                            weight=ft.FontWeight.BOLD,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            max_lines=1,
+                            tooltip=self.persona.name,
+                        ),
+                        ft.Text(
+                            self.persona.title or "本地",
+                            color=c.TEXT_SECONDARY,
+                            size=t.TINY,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            max_lines=1,
+                            tooltip=self.persona.title or "本地",
+                        ),
                     ],
                     spacing=2,
                     expand=True,
@@ -182,7 +199,16 @@ class PersonaStatusPanel(ft.Container):
             ft.Row(
                 [
                     ft.Container(width=4, height=4, bgcolor=c.PRIMARY, border_radius=r.FULL, margin=ft.Margin.only(top=6)),
-                    ft.Text(item, color=c.TEXT_SECONDARY, size=t.CAPTION, expand=True),
+                    # P5：记忆条目单行省略 + tooltip 全文，窄栏不再竖排
+                    ft.Text(
+                        item,
+                        color=c.TEXT_SECONDARY,
+                        size=t.CAPTION,
+                        expand=True,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        max_lines=1,
+                        tooltip=item,
+                    ),
                 ],
                 spacing=sp.SM,
                 alignment=ft.MainAxisAlignment.START,
