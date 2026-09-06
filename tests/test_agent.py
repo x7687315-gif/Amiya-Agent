@@ -267,3 +267,15 @@ def test_memory_does_not_pollute_knowledge(store, tmp_path):
     # 知识检索本身也不应返回记忆内容
     assert kmgr.retrieve("橘猫") == []
 
+
+# ----- 构造参数校验（2026-09-06 审查修复） -----
+
+
+def test_history_limit_must_be_positive():
+    """history_limit=0 会因负零切片语义 [-0:] == [0:] 变成**全量历史**，
+    与配置意图完全相反——必须在构造期拒绝（让非法状态不可表示）。"""
+    with pytest.raises(ValueError):
+        Agent(persona=load_persona(), llm=FakeLLM(), history_limit=0)
+    with pytest.raises(ValueError):
+        Agent(persona=load_persona(), llm=FakeLLM(), history_limit=-3)
+

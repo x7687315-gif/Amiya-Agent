@@ -112,6 +112,11 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS) -> list:
 
 # ===================== WAV 解析 / 拼接 =====================
 
+# 最小合法 WAV 头字节数（RIFF 12B + fmt 块 24B + data 头 8B）；
+# 短于该长度的响应必非有效音频（service 与 tts_web 共用此常量）
+MIN_WAV_HEADER_BYTES = 44
+
+
 def is_valid_wav(data: bytes) -> bool:
     """最小 WAV 魔数校验：'RIFF' + 字节数 + 'WAVE'。"""
     return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE"
@@ -123,9 +128,8 @@ def wav_params_and_pcm(raw: bytes):
     GPT-SoVITS streaming 返回的 WAV，其 header 里的 data size 常为占位值(0)，
     wave.readframes 会据此返回 0 帧，因此 PCM 改为直接从 'data' 子块后读取。
     """
-    w = wave.open(io.BytesIO(raw), "rb")
-    params = w.getparams()
-    w.close()
+    with wave.open(io.BytesIO(raw), "rb") as w:
+        params = w.getparams()
     idx = raw.find(b"data")
     if idx < 0:
         raise ValueError("WAV 缺少 data 子块")

@@ -19,6 +19,7 @@ import logging
 import math
 import os
 import re
+import threading
 from array import array
 from pathlib import Path
 from typing import List, Optional, Protocol, Sequence, runtime_checkable
@@ -161,6 +162,10 @@ class LocalEmbedder:
         self._query_instruction = query_instruction
         self._model = None
         self._dim: Optional[int] = None
+        # 懒加载锁：encode() 可能同时来自 UI 线程（检索）与 worker 线程
+        #（remember/confirm），无锁并发会双双通过 None 检查、重复加载
+        # 约 130MB 模型并互相覆盖（2026-09-06 审查修复）
+        self._model_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -175,6 +180,13 @@ class LocalEmbedder:
     def _ensure_model(self):
         if self._model is not None:
             return self._model
+        with self._model_lock:
+            if self._model is not None:
+                # 双重检查：等锁期间其他线程已完成加载，直接复用
+                return self._model
+            return self._load_model()
+
+    def _load_model(self):
 
         # 离线优先（2026-08-17 启动卡死修复）：模型已在本地缓存时，跳过
         # huggingface.co 的更新探测。网络不可达环境下每次 HEAD 超时（约 21s）

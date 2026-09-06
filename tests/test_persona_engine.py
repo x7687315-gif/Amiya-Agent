@@ -143,3 +143,13 @@ def test_agent_works_without_memory_no_relationship_block():
     # 行为/语言/价值观仍注入（来自 YAML）
     assert "【行为准则】" in llm.last_system
     assert "【助手的视角与价值观】" in llm.last_system
+
+
+def test_stage_tolerates_non_numeric_threshold():
+    """relationship.yaml 里 threshold 误写非数字（如 "高"）时不得抛 ValueError——
+    relationship_block() 在 reply() 主链路上且无降级保护（审查发现）。"""
+    rm = RelationshipManager(memory=None)  # trust 默认 70
+    rm._stages = {"相识": {"threshold": "高"}, "信任": {"threshold": 30}}
+    # 非数字阈值按 0 处理：排序与比较都不抛异常，stage 正常判定
+    assert rm.stage == "信任"
+    assert rm.block() is None  # memory=None 时 block() 仍返回 None

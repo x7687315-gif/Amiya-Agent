@@ -97,9 +97,13 @@ def load_settings() -> Settings:
 def persist_ui_skin(skin_id: str, env_path: "os.PathLike | str | None" = None) -> None:
     """把 ``UI_SKIN=<skin_id>`` 写回 .env（不存在则创建），供皮肤手动选择持久化。
 
-    皮肤计划 Phase 2：PersonaDrawer「外观」区块选中后调用，**重启后生效**
-    （运行时换肤是 Phase 4 边界，不在本函数预支）。只改 UI_SKIN 这一行，
-    其余配置原样保留。env_path 供测试注入，生产默认写项目根 .env。
+    只改 UI_SKIN 这一行，其余配置原样保留。env_path 供测试注入，生产默认写
+    项目根 .env。
+
+    【必须同步 os.environ】load_dotenv() 只在本模块导入时执行一次；运行时
+    换肤（_rebuild_ui_async → load_settings）读的是 os.getenv 而非 .env 文件。
+    只写文件会让重建拿到进程启动时的过期皮肤——「点击立即生效」实际失效
+    （2026-09-06 审查 CRITICAL-1 根因）。
     """
     path = Path(env_path) if env_path else Path(__file__).resolve().parent / ".env"
     skin_id = (skin_id or "auto").strip()
@@ -115,12 +119,16 @@ def persist_ui_skin(skin_id: str, env_path: "os.PathLike | str | None" = None) -
     if not replaced:
         out.append(f"UI_SKIN={skin_id}")
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.environ["UI_SKIN"] = skin_id  # 运行时重读配置的单一真源
 
 
 def persist_ui_layout(left_width: int, right_width: int, env_path: "os.PathLike | str | None" = None) -> None:
     """把栏宽写回 .env（UI_LEFT_WIDTH / UI_RIGHT_WIDTH），其余配置原样保留。
 
     拖拽分栏手柄松手时调用（2026-08-17 可调聊天区需求）。env_path 供测试注入。
+
+    【必须同步 os.environ】理由同 persist_ui_skin：运行时换肤重建会经
+    load_settings() 重读栏宽，只写文件会让布局回退到进程启动时的旧值。
     """
     path = Path(env_path) if env_path else Path(__file__).resolve().parent / ".env"
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
@@ -138,3 +146,5 @@ def persist_ui_layout(left_width: int, right_width: int, env_path: "os.PathLike 
         if key not in seen:
             out.append(f"{key}={value}")
     path.write_text(chr(10).join(out) + chr(10), encoding="utf-8")
+    for key, value in wanted.items():
+        os.environ[key] = value  # 运行时重读配置的单一真源

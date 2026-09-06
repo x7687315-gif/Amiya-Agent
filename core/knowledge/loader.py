@@ -8,11 +8,14 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,9 @@ class KnowledgeCorpus:
         for path in sorted(self.directory.glob("*.md")):
             try:
                 text = path.read_text(encoding="utf-8")
-            except OSError:
+            except OSError as e:
+                # 留痕：文件名拼错/权限问题会让知识库"安静地变空"，必须可排查
+                log.warning("知识文件读取失败（已跳过）：%s：%s", path, e)
                 continue
             chunks.extend(self._split(text, path.name))
         return chunks

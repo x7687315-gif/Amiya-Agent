@@ -16,8 +16,13 @@ from typing import Dict, Iterator, List, Protocol, runtime_checkable
 
 import requests
 
-# 网络层瞬时异常：值得重试
-_TRANSIENT = (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+# 网络层瞬时异常：值得重试。ChunkedEncodingError 常见于连接在流式传输
+# 途中被掐断——只要尚未产出内容（produced 守卫），重试是安全的
+_TRANSIENT = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
 _MAX_RETRIES = 2
 
 
@@ -143,25 +148,25 @@ class DeepSeekLLMClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        resp = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                resp = requests.post(
+                # with 确保 retry/解析异常路径也释放连接（抽取是低频调用，
+                # 但句柄滞留至 GC 的模式在长期运行下会堆积）
+                with requests.post(
                     self.url, json=payload, headers=headers, timeout=self.timeout
-                )
-                break
+                ) as resp:
+                    if resp.status_code != 200:
+                        body = resp.text[:500]
+                        raise RuntimeError(f"DeepSeek 返回 {resp.status_code}: {body}")
+                    try:
+                        obj = resp.json()
+                    except ValueError:
+                        raise RuntimeError(f"DeepSeek 返回非 JSON 响应: {resp.text[:200]}")
+                    try:
+                        return obj["choices"][0]["message"]["content"] or ""
+                    except (KeyError, IndexError, TypeError) as exc:
+                        raise RuntimeError(f"DeepSeek 响应结构异常: {obj}") from exc
             except _TRANSIENT:
                 if attempt == _MAX_RETRIES:
                     raise
                 time.sleep(2 ** attempt)
-        if resp.status_code != 200:
-            body = resp.text[:500]
-            raise RuntimeError(f"DeepSeek 返回 {resp.status_code}: {body}")
-        try:
-            obj = resp.json()
-        except ValueError:
-            raise RuntimeError(f"DeepSeek 返回非 JSON 响应: {resp.text[:200]}")
-        try:
-            return obj["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError(f"DeepSeek 响应结构异常: {obj}") from exc

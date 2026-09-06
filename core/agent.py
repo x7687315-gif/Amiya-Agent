@@ -79,6 +79,10 @@ class Agent:
         self.llm = llm
         self.prompt_builder = PromptBuilder(persona)
         self.system_prompt = self.prompt_builder.build_system()
+        if history_limit < 1:
+            # 0/负数会因 Python 切片语义 [-0:] == [0:] 退化为**全量历史**，
+            # 与"限制窗口"的意图完全相反（2026-09-06 审查修复）
+            raise ValueError(f"history_limit 必须 ≥ 1，收到 {history_limit!r}")
         self.history_limit = history_limit
         self._on_phase = on_phase
         self._memory = memory

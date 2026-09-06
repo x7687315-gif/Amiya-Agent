@@ -42,6 +42,16 @@ _STATE_FIELDS = {
     "last_seen_at",
 }
 
+
+def _escape_like(keyword: str) -> str:
+    """转义 SQL LIKE 通配符（配合 ``ESCAPE '\\'`` 使用）。
+
+    用户的「遗忘关键词」是字面语义：内容里真实的 % / _ 与关键词里的
+    % / _ 必须逐字符对应，否则 ``forget("%")`` 等于清空整张表。
+    """
+    return keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS conversation(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -644,11 +654,15 @@ class SQLiteMemoryStore:
 
         与 delete_by_keyword 配套：用户说「别记这个」时，若只删正表不清队列，
         同一条内容会从候选里再冒出来问一次。
+
+        LIKE 通配符按字面匹配（ESCAPE）：关键词里的 % / _ 不展开——
+        否则 forget("%") 会清空整个候选队列（2026-09-06 审查修复）。
         """
+        escaped = _escape_like(keyword)
         with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM memory_candidate WHERE status='pending' AND content LIKE ?",
-                (f"%{keyword}%",),
+                "DELETE FROM memory_candidate WHERE status='pending' AND content LIKE ? ESCAPE '\\'",
+                (f"%{escaped}%",),
             )
             self._conn.commit()
             return cur.rowcount
@@ -680,6 +694,19 @@ class SQLiteMemoryStore:
                 "total_turns, last_extract_msg_id, last_seen_at FROM persona_state "
                 "WHERE id=1"
             ).fetchone()
+        if row is None:
+            # 种子行缺失 = 库被外部破坏（v1 起由 INSERT OR IGNORE 保证存在）。
+            # 返回与 schema DEFAULT 一致的缺省值，而不是在 reply() 链路里裸抛
+            # TypeError（2026-09-06 审查修复）。默认值须与上方建表 DEFAULT 同步。
+            return {
+                "trust": 70,
+                "companionship_seconds": 0,
+                "companionship_day": "",
+                "emotion": "calm",
+                "total_turns": 0,
+                "last_extract_msg_id": 0,
+                "last_seen_at": "",
+            }
         return {
             "trust": row["trust"],
             "companionship_seconds": row["companionship_seconds"],
@@ -857,9 +884,13 @@ class SQLiteMemoryStore:
 
     def delete_by_keyword(self, keyword: str) -> int:
         now = datetime.now().isoformat()
+        # LIKE 通配符按字面匹配（ESCAPE）：关键词里的 % / _ 不展开——
+        # 否则用户误输入 "%" 会一次性清空全部记忆（2026-09-06 审查修复）
+        escaped = _escape_like(keyword)
         with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM memory WHERE content LIKE ?", (f"%{keyword}%",)
+                "DELETE FROM memory WHERE content LIKE ? ESCAPE '\\'",
+                (f"%{escaped}%",),
             )
             deleted = cur.rowcount
             self._conn.execute(

@@ -164,17 +164,3 @@ def window_width_of(page) -> int:
         return int(width)
     except (TypeError, ValueError):
         return 0
-
-
-def window_height_of(page) -> int:
-    """从 page 取当前窗口高度；取不到时返回 0（调用方自行回退默认值）。"""
-    try:
-        height = getattr(getattr(page, "window", None), "height", None)
-    except Exception:  # noqa: BLE001 - page 可能未就绪
-        return 0
-    if height is None:
-        return 0
-    try:
-        return int(height)
-    except (TypeError, ValueError):
-        return 0

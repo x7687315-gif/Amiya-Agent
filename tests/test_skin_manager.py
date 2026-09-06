@@ -406,7 +406,10 @@ def test_on_skin_selected_persists_and_rebuilds(monkeypatch):
 
 
 def test_on_skin_selected_skips_rebuild_while_generating(monkeypatch):
-    """正在生成回复时只保存、不重建（流式 worker 持有旧控件）。"""
+    """正在生成回复时只保存、不重建（流式 worker 持有旧控件）。
+
+    2026-09-06 起 busy 判断改读 _generating 单一真源，
+    不再跨对象探测 input_bar._is_loading 私有属性。"""
     import ui.app as app_mod
     from ui.app import AssistantApp
 
@@ -414,11 +417,7 @@ def test_on_skin_selected_skips_rebuild_while_generating(monkeypatch):
     rebuilt = []
     monkeypatch.setattr(app_mod, "persist_ui_skin", lambda sid: saved.append(sid))
     app = AssistantApp()
-
-    class _BusyBar:
-        _is_loading = True
-
-    app.input_bar = _BusyBar()
+    app._generating = True
     app._apply_skin_runtime = lambda: rebuilt.append(True)
     app._on_skin_selected("warm")
     assert saved == ["warm"]

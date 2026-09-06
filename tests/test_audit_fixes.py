@@ -64,6 +64,12 @@ class _ChatResp:
     status_code = 200
     text = ""
 
+    def __enter__(self):
+        return self  # chat() 现以 with 消费响应（2026-09-06 资源关闭修复）
+
+    def __exit__(self, *a):
+        return False
+
     def json(self):
         return {"choices": [{"message": {"content": "好的"}}]}
 

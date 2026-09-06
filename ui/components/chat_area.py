@@ -40,14 +40,25 @@ class ChatArea(ft.Container):
         self._chat_text_width: float = 0
 
         self._scroll_btn = self._build_scroll_btn()
-        self._list = ft.ListView(
+        self._list = ft.Column(
             controls=[self._empty_state],
             spacing=sp.SM,
-            padding=ft.Padding.only(left=sp.LG, right=sp.LG, top=sp.LG, bottom=sp.SM),
-            auto_scroll=True,
             expand=True,
             on_scroll=self._on_scroll,
+            # 滚动条常显（与 P6 记忆面板同一裁定）：侧边条要随时可抓
+            scroll=ft.ScrollMode.ALWAYS,
         )
+        # ★ 为什么是 Column 而不是 ListView（2026-09-06 探针实证 v4-v9）：
+        # 1) ListView（懒构建）的 max_scroll_extent 按"已构建子项"估算且滚动
+        #    被钳在估算值内——触达估算末端时位置修正把视图**传送回顶部**，
+        #    滚轮/拖滚动条/scroll_to 全部到不了底（探针截屏复现）；
+        #    build_controls_on_demand=False 反而破坏子项宽度约束（文本不换行）。
+        # 2) 纯 Column(scroll=ALWAYS) 的 extent 与手算真值**精确一致**（8 轮
+        #    混合气泡 1149.6 == 理论值），跳底无重置（probe v7-D）。
+        # 3) 因此放弃 Flutter 侧 auto_scroll 钉底（它在 ListView 上是唯一"能用"
+        #    的跟随手段，且与 scroll_to 互斥），改为**显式 scroll_to 跟随**：
+        #    _scroll_if_auto 在每次追加/流式增量后跳到真实底部。
+        # 按天会话量级（数百气泡）一次性布局，性能可接受。
         self.content = ft.Stack([self._list, self._scroll_btn], expand=True)
         # 透明背景：让皮肤壁纸透出（气泡本身是 SURFACE/PRIMARY_LIGHT 不透明卡片，
         # 聊天文字始终落在卡片上，可读性不受影响）
@@ -95,6 +106,8 @@ class ChatArea(ft.Container):
             page.run_task(self._async_scroll, duration)
 
     async def _async_scroll(self, duration: int) -> None:
+        """跳到最新消息。Column 的 extent 为真实内容高度（探针 v7-D 实证），
+        offset=-1 即真实底部；无需任何 auto_scroll 标志切换。"""
         await self._list.scroll_to(offset=-1, duration=duration)
 
     def set_chat_text_width(self, width: float) -> None:
@@ -290,20 +303,20 @@ class ChatArea(ft.Container):
         if e.max_scroll_extent is None:
             return
         at_bottom = e.pixels >= e.max_scroll_extent - 8
+        # 只在状态翻转时改 FAB 可见性（跟随模式的 _auto_scroll 同步翻转；
+        # 列表本身没有 auto_scroll 标志——显式 scroll_to 跟随，见 __init__ 注释）
         if at_bottom and not self._auto_scroll:
             self._auto_scroll = True
-            self._list.auto_scroll = True
             self._scroll_btn.visible = False
             self._scroll_btn.update()
         elif not at_bottom and self._auto_scroll:
             self._auto_scroll = False
-            self._list.auto_scroll = False
             self._scroll_btn.visible = True
             self._scroll_btn.update()
 
     def _scroll_to_bottom(self, _e: ft.ControlEvent) -> None:
-        self._auto_scroll = True
-        self._list.auto_scroll = True
+        """FAB 回调：隐藏按钮并跳到真实底部；落底后 _on_scroll 的 at_bottom
+        分支恢复跟随（后续流式增量继续自动回底）。"""
         self._scroll_btn.visible = False
         page = self._safe_page(self._list)
         if page is not None:

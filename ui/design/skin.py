@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, replace
@@ -28,6 +29,8 @@ from ui.design.avatar_provider import (
 )
 from ui.theme import Colors, apply_skin, c
 
+log = logging.getLogger("assistant.ui.skin")
+
 # 项目根（ui/design/skin.py → parents[2] = 仓库根）
 _ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SKINS_DIR = _ROOT / "resources" / "skins"
@@ -35,11 +38,8 @@ DEFAULT_AVATAR_PATH = _ROOT / "resources" / "avatar" / "default.png"
 
 DEFAULT_SKIN_ID = "starry"
 
-# 壁纸画布规格：烘焙为 2560×1600「左置画布」——左侧为壁纸本体，右缘即延伸色
-# （dominant_color），接缝天然无缝。app 侧按此比例做「等高 + 左锚」布局
-# （docs/20_UI_ADAPTATION_ISSUES.md P4）：窗口再怎么高瘦，被裁的都只是右侧
-# 延伸区，壁纸本体（左缘）永不动。重烘画布时若改了尺寸，同步改这里。
-SKIN_CANVAS_RATIO = 2560 / 1600
+# 壁纸画布：各皮肤 background.jpg 源尺寸不限（2026-09-06 起壁纸以 COVER
+# 内嵌聊天框区域自适应显示，不再依赖统一画布比例；烘焙规格见 docs/17/25）。
 
 # 情绪 → 皮肤 静态映射（sakura / sunset 为手动皮肤，不在此表）。
 # 想调整映射，改这里或各 skin.json 的 emotion 字段即可，不动核心逻辑。
@@ -68,7 +68,9 @@ class Skin:
     scrim_opacity: float = 0.8  # 壁纸上的浅色遮罩不透明度（保证前景可读）
     emotion: Optional[str] = None  # 仅信息性：默认映射情绪
     is_manual_only: bool = False  # True = 仅手动可选（sakura / sunset）
-    dominant_color: Optional[str] = None  # 壁纸右缘主色：背景铺底延伸色（用户方案）
+    dominant_color: Optional[str] = None  # 壁纸边缘环均值色：侧栏/头部/周围的平和纯色
+    edge_colors: Optional[dict] = None  # 壁纸四边环均值色 {top,bottom,left,right}：
+    # 周围填充逐边延续壁纸自身的边色（"以壁纸周围那一圈颜色慢慢延伸开"，docs/26）
 
 
 @dataclass(frozen=True)
@@ -154,8 +156,11 @@ class SkinManager:
                     emotion=raw.get("emotion"),
                     is_manual_only=bool(raw.get("is_manual_only", False)),
                     dominant_color=(raw.get("dominant_color") or None),
+                    edge_colors=(raw.get("edge_colors") or None),
                 )
-            except Exception:  # noqa: BLE001 - 单皮肤损坏只跳过
+            except Exception as e:  # noqa: BLE001 - 单皮肤损坏只跳过
+                # docstring 承诺"记日志"——兑现它：坏皮肤文件无声丢失最难排查
+                log.warning("皮肤加载失败（已跳过）：%s/%s：%s", folder.name, sub.name, e)
                 continue
 
     def _default(self) -> Skin:

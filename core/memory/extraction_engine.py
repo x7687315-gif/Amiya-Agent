@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Dict, List
 
 from .extractor import ExtractedMemory, MemoryExtractor
@@ -28,6 +29,8 @@ from .store import MEMORY_TYPES
 
 if TYPE_CHECKING:  # 仅类型标注，运行期不导入 llm_client（保持依赖收敛在 core.memory）
     from ..llm_client import LLMClient
+
+log = logging.getLogger(__name__)
 
 # 抽取提示词：独立于助手人格。明确"你不是助手本人"，杜绝人格泄漏。
 EXTRACTION_SYSTEM_PROMPT = (
@@ -172,7 +175,10 @@ class ExtractionEngine:
                 temperature=0.0,
                 max_tokens=1024,
             )
-        except Exception:  # noqa: BLE001 - 抽取失败绝不崩对话
+        except Exception as e:  # noqa: BLE001 - 抽取失败绝不崩对话
+            # 静默降级但必须留痕：EXTRACT_AUTO 开启后若 API key 失效，
+            # 这里是唯一能发现"抽取链路已死"的地方
+            log.warning("记忆抽取 LLM 调用失败（本轮返回空候选）：%s", e)
             return []
         items = parse_json_array(raw, max_candidates=max_candidates)
         if not items:
