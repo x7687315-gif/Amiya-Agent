@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    env:
+      # 只跑不需要外部服务的测试：嵌入用纯 stdlib 的 hashing 后端，
+      # 不下载向量模型、不调用 DeepSeek（协议测试用假客户端）。
+      EMBEDDING_BACKEND: hashing
+      DEEPSEEK_API_KEY: sk-test-ci-not-a-real-key
+      TTS_ENABLED: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Dependency sanity (pip check)
+        run: pip check || true   # 记录但不阻断：可选依赖（diffusers 等）未装
+
+      - name: Backend tests
+        run: |
+          python -m pytest -q -p no:hydra_pytest \
+            tests/test_runtime.py \
+            tests/test_tools.py \
+            tests/test_tools_builtin.py \
+            tests/test_task_runner.py \
+            tests/test_skills.py \
+            tests/test_knowledge.py \
+            tests/test_knowledge_hybrid.py \
+            tests/test_memory_manager.py \
+            tests/test_memory_store.py \
+            tests/test_memory_gate.py \
+            tests/test_retrieval.py \
+            tests/test_history_window.py \
+            tests/test_context_assembler.py \
+            tests/test_agent.py \
+            tests/test_prompt_builder.py \
+            tests/test_config.py \
+            tests/test_embedder.py \
+            tests/test_server_tools.py \
+            tests/test_llm_tools.py
