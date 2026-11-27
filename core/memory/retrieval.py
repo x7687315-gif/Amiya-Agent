@@ -20,11 +20,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from typing import Dict, List, Optional, Sequence
 
+from ..retrieval_status import RetrievalOutcome, RetrievalStatus
 from .embedder import Embedder, cosine, tokenize
 from .store import MEMORY_TYPES, MemoryStore
 
@@ -193,17 +195,39 @@ class MemoryRetriever:
         types: Sequence[str] = MEMORY_TYPES,
         min_score: Optional[float] = None,
     ) -> List[RetrievalHit]:
-        """按混合分返回最相关的记忆（降序）。"""
+        """按混合分返回最相关的记忆（降序）。兼容旧调用方。"""
+        return self.retrieve_outcome(
+            query, top_k=top_k, types=types, min_score=min_score).hits
+
+    def retrieve_outcome(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        types: Sequence[str] = MEMORY_TYPES,
+        min_score: Optional[float] = None,
+    ) -> RetrievalOutcome:
+        """带状态的检索：区分"没回忆起来"与"检索坏了"。"""
+        start = time.perf_counter()
+
+        def done(hits, status, reason="", candidates=0) -> RetrievalOutcome:
+            top = max((h.score for h in hits), default=None)
+            return RetrievalOutcome(
+                hits=hits, status=status, reason=reason, candidates=candidates,
+                top_score=top,
+                duration_ms=(time.perf_counter() - start) * 1000,
+            )
+
         query = (query or "").strip()
         if not query or top_k <= 0:
-            return []
+            return done([], RetrievalStatus.NO_RELEVANT_RESULTS, "empty_query")
 
         model = getattr(self._embedder, "name", None)
         rows = self._store.retrieval_rows(
             types=types, limit=self._candidate_limit, model=model
         )
         if not rows:
-            return []
+            return done([], RetrievalStatus.NO_RELEVANT_RESULTS, "no_data")
 
         # 黑名单兜底：入口已拦截过一次，但用户可能在记忆写入之后才拉黑，
         # 那些历史记忆仍躺在库里。检索这层是它们进入提示词的最后关口。
@@ -215,7 +239,7 @@ class MemoryRetriever:
                 if not any(kw in str(r.get("content", "")) for kw in blocked)
             ]
             if not rows:
-                return []
+                return done([], RetrievalStatus.NO_RELEVANT_RESULTS, "all_blocked")
 
         qvec = self._query_vector(query)
         vec_scores = self._vector_scores(qvec, rows)
@@ -263,7 +287,23 @@ class MemoryRetriever:
             )
 
         hits.sort(key=lambda h: (-h.score, -h.importance, h.id))
-        return hits[:top_k]
+        top = hits[:top_k]
+        # 嵌入不可用（qvec=None）时仍可能靠关键词/权重命中——这是"降级可用"，
+        # 必须与"确实没有相关记忆"区分开，否则故障会被误读成正常。
+        degraded = qvec is None
+        if top:
+            return done(
+                top,
+                RetrievalStatus.DEGRADED if degraded else RetrievalStatus.SUCCESS,
+                "embed_unavailable" if degraded else "",
+                len(rows),
+            )
+        return done(
+            [],
+            RetrievalStatus.DEGRADED if degraded else RetrievalStatus.NO_RELEVANT_RESULTS,
+            "embed_unavailable" if degraded else "below_threshold",
+            len(rows),
+        )
 
 
 def format_memory_block(hits: Sequence[RetrievalHit]) -> str:

@@ -26,6 +26,8 @@ from typing import Dict, Iterator, List, Optional, Protocol, runtime_checkable
 
 import requests
 
+from core.protocol_guard import validate_messages
+
 logger = logging.getLogger(__name__)
 
 # 网络层瞬时异常：值得重试。ChunkedEncodingError 常见于连接在流式传输
@@ -485,6 +487,11 @@ class DeepSeekLLMClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        # 最后一道网：结构不合法时留痕（不改变行为，也不阻断请求）。
+        # 带服务端工具的请求对"首条必须是 user"更严格，这里能提前发现。
+        _issues = validate_messages(payload.get("messages") or [])
+        if _issues:
+            logger.debug("出站消息序列异常（%s）：caller=%s", ",".join(_issues), caller)
         last_exc: "Optional[LLMError]" = None
         for attempt in range(_MAX_RETRIES + 1):
             if cancel is not None and cancel.is_set():

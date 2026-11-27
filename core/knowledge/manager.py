@@ -34,11 +34,20 @@ class KnowledgeManager:
         return len(self.corpus.chunks) == 0
 
     def retrieve(self, query: str, top_k: Optional[int] = None) -> List[KnowledgeHit]:
+        return self.retrieve_outcome(query, top_k=top_k).hits
+
+    def retrieve_outcome(
+        self, query: str, top_k: Optional[int] = None
+    ) -> "RetrievalOutcome":
+        """带状态的检索（不抛异常：失败也返回 FAILED）。"""
+        from ..retrieval_status import RetrievalOutcome, RetrievalStatus
+
         try:
-            return self.retriever.retrieve(query, top_k=top_k)
+            return self.retriever.retrieve_outcome(query, top_k=top_k)
         except Exception as e:  # noqa: BLE001
             log.warning("知识检索失败：%s", e)
-            return []
+            return RetrievalOutcome(
+                hits=[], status=RetrievalStatus.FAILED, reason=str(e)[:80])
 
     def render_block(self, hits: List[KnowledgeHit]) -> str:
         return self.retriever.render_block(hits)

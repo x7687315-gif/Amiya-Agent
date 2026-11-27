@@ -50,6 +50,9 @@ class ResearchResult:
     calls: List[ResearchCall] = field(default_factory=list)
     error: str = ""
     error_kind: str = ""
+    # 研究会话状态：continued / restarted / blocked / ""（未启用会话）
+    session_state: str = ""
+    session_id: str = ""
 
 
 _KIND_LABEL = {
@@ -175,12 +178,25 @@ def extract_calls(resp: LLMResponse, *, limit: int = 12) -> List[ResearchCall]:
 class ResearchRunner:
     """单轮联网研究。与 TaskRunner 一样是「单飞」的（同一时刻一个请求）。"""
 
-    def __init__(self, *, agent: Agent, llm, tools: List[dict]) -> None:
+    def __init__(
+        self,
+        *,
+        agent: Agent,
+        llm,
+        tools: List[dict],
+        sessions=None,
+        conversation_id: str = "",
+        auto_restart: bool = True,
+    ) -> None:
         if not tools:
             raise ValueError("ResearchRunner 需要至少一个服务端工具声明")
         self._agent = agent
         self._llm = llm
         self._tools = list(tools)
+        self._sessions = sessions          # ResearchSessionRepository | None
+        self._conversation_id = conversation_id
+        self._auto_restart = auto_restart
+        self._active_id = ""
         self._running = False
 
     @property
@@ -194,10 +210,15 @@ class ResearchRunner:
         self._running = True
         try:
             ctx = self._agent.begin_task(user_text)
+            messages, session_state, session_id = self._prepare(ctx, user_text)
+            if session_state == "blocked":
+                return ResearchResult(
+                    False, error="上次检索的状态已不可用，请重新提问。",
+                    error_kind="research_blocked", session_state="blocked")
             try:
                 resp = self._llm.chat_with_server_tools(
                     ctx.system_prompt + "\n\n" + RESEARCH_RULES,
-                    ctx.messages, tools=self._tools)
+                    messages, tools=self._tools)
             except LLMError as exc:
                 log.warning("联网检索失败（kind=%s）：%s", exc.kind, exc)
                 return ResearchResult(False, error=str(exc), error_kind=exc.kind)
@@ -217,9 +238,52 @@ class ResearchRunner:
 
             # 与快路径等价的收尾：落库 + 入窗口 + 情绪持久化 + 完成通知
             self._agent.finish_task(text, emotion=ctx.emotion)
-            return ResearchResult(True, text=text, sources=sources, calls=calls)
+            self._save_turn(session_id, user_text, resp, sources)
+            return ResearchResult(True, text=text, sources=sources, calls=calls,
+                                  session_state=session_state, session_id=session_id)
         finally:
             self._running = False
+
+    # ----- 会话 -----
+    def _prepare(self, ctx, user_text: str):
+        """决定本轮是延续上一轮研究，还是重新开始。"""
+        if self._sessions is None:
+            return ctx.messages, "", ""
+
+        had_session = bool(self._active_id)
+        if had_session:
+            session = self._sessions.get(self._active_id)
+            ok, reason = self._sessions.check(session)
+            if ok:
+                msg = session.protocol_message()
+                history = []
+                prev_user = session.last_user_text()
+                if prev_user:
+                    history.append({"role": "user", "content": prev_user})
+                history.append(msg)
+                history.append({"role": "user", "content": user_text})
+                return history, "continued", self._active_id
+            log.info("研究会话不可延续（%s），本轮重新开始", reason)
+            if not self._auto_restart:
+                return ctx.messages, "blocked", ""
+
+        session = self._sessions.create(self._conversation_id)
+        self._active_id = session.session_id
+        return ctx.messages, ("restarted" if had_session else ""), session.session_id
+
+    def _save_turn(self, session_id: str, user_text: str, resp, sources) -> None:
+        if self._sessions is None or not session_id:
+            return
+        message = {"role": "assistant", "content": resp.content or ""}
+        if resp.server_tool_calls:
+            message["server_tool_calls"] = resp.server_tool_calls
+        try:
+            self._sessions.record_turn(
+                session_id, user_text=user_text, assistant_message=message,
+                sources=[{"url": s.url, "title": s.title} for s in sources],
+            )
+        except Exception as exc:  # noqa: BLE001 - 存不下状态不应阻断回答
+            log.warning("研究会话状态保存失败（本轮仍返回结果）：%s", exc)
 
     def cancel(self) -> bool:
         """非流式请求无法在途打断（requests 阻塞），故不支持取消。

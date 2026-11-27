@@ -135,4 +135,7 @@ def test_metadata_no_internal_scores():
     ctx = assembler.assemble("x", now=datetime(2026, 1, 1))
     assert "confidence" not in ctx.metadata
     assert "candidate" not in ctx.metadata
-    assert set(ctx.metadata) == {"source", "knowledge_used"}
+    # 新增 retrieval 状态（无分数、无正文，仅用于区分"没检索到"与"检索坏了"）
+    assert set(ctx.metadata) == {"source", "knowledge_used", "retrieval"}
+    for ch in ctx.metadata["retrieval"].values():
+        assert set(ch) <= {"status", "hits", "candidates", "duration_ms", "reason"}
