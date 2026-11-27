@@ -1,841 +1,577 @@
-# Amiya Agent
-
-> 一个面向长期陪伴场景设计的、本地优先（local-first）的角色型 AI Agent 桌面应用。
-
-Amiya Agent 的核心不是让一个 LLM「扮演一个角色」，而是探索如何把**稳定人格、角色知识、用户长期记忆、关系状态、情绪状态**与**模型生成能力**组织成一个可持续演进的 Agent 系统。
-
-项目采用 **Persona / Knowledge / Memory 三分离** 的核心设计，同时通过 Agent 编排层将多个上下文来源以明确边界组装进 LLM Prompt。
-
-当前项目是一个持续开发中的个人研究型 Agent 项目。公开仓库刻意**只提供通用代码、架构、测试、示例配置和中性占位资源**；私人记忆、个人资产、语音模型、API credentials 等均不包含在仓库中（详见 [SECURITY.md](SECURITY.md) 与 [开源边界](#27-privacy--open-source-boundary)）。
+# Amiya Agent · 本地桌面陪伴智能体
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![Flet](https://img.shields.io/badge/UI-Flet%200.86.5-9cf.svg)
 ![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek%20API-orange.svg)
 ![SQLite](https://img.shields.io/badge/Memory-SQLite-cyan.svg)
 ![RAG](https://img.shields.io/badge/Knowledge-RAG-green.svg)
-![Memory](https://img.shields.io/badge/Agent-Memory%20Gate-success.svg)
-![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Tests](https://img.shields.io/badge/tests-306%20passed-success.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-> 说明：以上为静态技术栈徽章。本仓库暂未配置 GitHub Actions，因此**不放置 CI / coverage / release 徽章**（避免伪造状态）。
+> 一个跑在本机的桌面陪伴智能体：有稳定人格、长期记忆、能被审批的行动能力，
+> 以及**可被评测、可被观测**的检索系统。
+> 它不追求"功能数量"，追求的是**做的事情值得信任**。
 
----
-
-## 1. Project Overview
-
-普通 ChatBot 的典型模式是把用户输入直接塞进 Prompt 交给 LLM：
-
-```
-User → Prompt → LLM → Response
-```
-
-而长期陪伴 Agent 需要把多个「上下文来源」组织起来：
-
-```
-                 ┌─────────────┐
-                 │   Persona   │  我是谁？
-                 └──────┬──────┘
-                        │
-                 ┌──────▼──────┐
-                 │  Knowledge  │  我知道什么？
-                 └──────┬──────┘
-                        │
-User ───────────────►  ┌──────▼──────┐
-                        │    Agent    │  Orchestrator
-                        └──────┬──────┘
-                               │
-       ┌───────────────────────┼────────────────────────┐
-       ▼                       ▼                        ▼
-   Memory                  Emotion                    LLM
-   我经历过什么？          我现在是什么状态？          怎么生成回答？
-```
-
-本项目要解决的不是「一次回复写得好不好」，而是：
-
-- 它应该**记得**与用户共同经历的事；
-- 它应该有**稳定身份**，而不是在长上下文里逐渐漂移；
-- 它应该区分「**它知道的事**」（角色设定）与「**它经历过的事**」（用户记忆）；
-- 它应该**暴露自己的状态**（情绪、关系、记忆），但不假装自己是人类心智；
-- 它的架构应该足够**可被理解**，使未来的版本仍能安全地被修改。
-
-> **架构红线**：Agent = Decision & Orchestration。
-> Agent 不是数据库、TTS、UI、播放器或工具执行器的实际实现地点。
+> **本仓库状态**：已包含 2.x 的后端架构层（Runtime / Tool System / Tasks / Skills /
+> Scheduler / 联网研究 / 检索状态 / 协议校验）。界面仍是早期版本，任务面板、联网卡片、
+> 检索状态展示等 UI 尚未接入——这些**已明确列为技术债**（见 §16.1），不是"已完成"。
+> 完整的界面版本在作者本地仓库中开发，接入后同步到这里。
 
 ---
 
-## 2. Design Philosophy
+## 目录
 
-### 2.1 Persona / Knowledge / Memory Separation
+- [1. 这个项目是什么](#1-这个项目是什么)
+- [2. 设计原则](#2-设计原则)
+- [3. 系统全景](#3-系统全景)
+- [4. 一次对话的生命周期](#4-一次对话的生命周期)
+- [5. 行动系统](#5-行动系统)
+- [6. 联网与研究会话](#6-联网与研究会话)
+- [7. 记忆系统](#7-记忆系统)
+- [8. 知识 RAG](#8-知识-rag)
+- [9. 上下文组装](#9-上下文组装)
+- [10. 可观测性](#10-可观测性让坏了能被看见)
+- [11. 数据与迁移](#11-数据与迁移)
+- [12. 工程实践](#12-工程实践)
+- [13. 失败矩阵](#13-失败矩阵)
+- [14. 配置](#14-配置)
+- [15. 目录结构](#15-目录结构)
+- [16. 技术债与路线图](#16-技术债与路线图)
+- [17. 运行](#17-运行)
 
-这是项目最重要的架构原则。三者分别回答不同的问题，且**不能互相污染**：
+---
 
-| 维度 | 回答 | 来源 |
+## 1. 这个项目是什么
+
+一个**本地优先**的个人 Agent。它把三类信息严格分开：
+
+| 层 | 存什么 | 谁写 | 会不会消失 |
+|---|---|---|---|
+| **Persona（人格）** | 身份、价值观、说话方式、关系阶段 | 配置文件，人工维护 | 永不自动改写 |
+| **Knowledge（知识）** | 世界观设定、项目文档 | 静态语料 | 不随对话变化 |
+| **Memory（记忆）** | 关于用户的经历、偏好、事实 | 对话中抽取 + 人工确认 | 受衰减与闸门约束 |
+
+在此之上，它还能**做事**：建任务、定时提醒、联网检索、调用技能——每一步都在权限与审批之下。
+
+### 它不是什么
+
+- **不是"接个大模型就能聊天"的壳**：模型只负责生成与决策，执行、状态、权限全在本地代码里。
+- **不是向量数据库 demo**：检索有评测集、有阈值校准、有降级状态，`docs/2x/IMPL_19`–`IMPL_21` 有完整数据。
+- **不是全自动 Agent**：任务要审批、外部内容不入长期记忆、人格核心不可被模型改写。
+
+---
+
+## 2. 设计原则
+
+1. **人格 / 知识 / 记忆三柱分离。** 三者各有存储、检索与生命周期，**绝不混表、绝不互相写入**。
+   混在一起是陪伴型 Agent 最常见的失败模式：模型会把"设定"当成"事实"，或把"记忆"说成"知识"。
+2. **Agent 是编排器，不是执行者。** 模型提出行动，Runtime 校验、授权、执行、观察。
+   模型**不能**因为"自己说搜索成功了"就认为搜索真的成功——必须有真实 Observation。
+3. **安静地降级是最危险的失败模式。** "没检索到"与"检索坏了"必须可区分；
+   凡是降级路径，都要有可见信号（状态、日志、UI 标注）。
+4. **默认关闭、可回滚。** 每个新能力都有独立开关，默认不改变既有行为；上线前用评测决定是否开启。
+5. **本地优先，不是本地大模型。** 对话、记忆、检索都在本机；只有生成调用远程 API。
+6. **用数据裁决，不用感觉裁决。** 阈值、混合检索、reranker 是否上，都先出分布与对照实验。
+
+---
+
+## 3. 系统全景
+
+### 3.1 分层
+
+```mermaid
+flowchart TB
+    subgraph UI["表现层 · ui/"]
+        A1[聊天区 / 输入栏]
+        A2[任务面板 / Run 卡片]
+        A3[联网卡片 / 来源]
+        A4[设置 / 皮肤]
+    end
+
+    subgraph APP["应用层 · core/application/"]
+        B1[Agent Facade]
+        B2[Request Router]
+        B3[Task Runner]
+        B4[Research Runner]
+        B5[Approval Bridge]
+    end
+
+    subgraph COG["认知层 · core/agent.py"]
+        C1[ContextAssembler]
+        C2[PromptBuilder]
+        C3[Persona / Relationship / Emotion]
+        C4[Memory Gate]
+        C5[Knowledge Retriever]
+    end
+
+    subgraph RUN["运行时 · core/runtime/"]
+        D1[AgentRuntime]
+        D2[EventBus]
+        D3[RunRepository]
+    end
+
+    subgraph TOOL["工具层 · core/tools/"]
+        E1[Registry / Schema]
+        E2[Validator]
+        E3[Permission L0-L3]
+        E4[Executor]
+    end
+
+    subgraph INFRA["基础设施"]
+        F1[(SQLite v6)]
+        F2[Embedder]
+        F3[DeepSeek API]
+    end
+
+    UI --> APP --> COG
+    APP --> RUN --> TOOL
+    COG --> F1
+    COG --> F2
+    COG --> F3
+    TOOL --> F1
+```
+
+**依赖方向是单向的**：`ui → application → agent/runtime → tools → storage`。
+反向依赖一律不允许（`core/tools` 不知道 UI 存在，`runtime` 不 import `ui`）。
+
+### 3.2 两条路径
+
+系统有两条**刻意分开**的路径：
+
+| | 快路径（聊天） | 任务路径（行动） |
 |---|---|---|
-| **Persona** | 我是谁？ | `config/persona/*.yaml`（identity / behavior / relationship / speech） |
-| **Knowledge** | 我知道什么？ | 静态 Markdown corpus（`knowledge/`） |
-| **Memory** | 我和用户经历过什么？ | SQLite memory system（`core/memory/`） |
+| 入口 | 直接输入 | ⚡ 任务模式 |
+| 调用 | 流式 `stream_chat` / 带工具 `chat_with_tools` | Runtime 状态机 |
+| 工具 | 只读工具（时间/计算/记忆查询） | 读写工具（建任务、提醒），需审批 |
+| 状态 | 无持久 Run | `agent_run` + `agent_run_step` |
+| 失败 | 降级为纯文本回答 | 状态机进入 failed，事件可追溯 |
 
-- **Persona** 包含身份、视角/世界观、行为规则、语气风格、关系状态。
-- **Knowledge** 来自静态 Markdown 知识语料，是「设定」。
-- **Memory** 来自 SQLite 记忆系统，是「经历」。
-
-> Persona ≠ Knowledge ≠ Memory。它们来源不同、生命周期不同、可信度与权限不同，必须物理与逻辑隔离。
-
-### 2.2 Agent is an Orchestrator
-
-Agent（`core/agent.py`）负责：
-
-- 接收用户输入
-- 确定当前上下文
-- 请求 Memory Retrieval
-- 请求 Knowledge Retrieval
-- 构建 Prompt
-- 调用 LLM（流式生成）
-- 保存对话
-- 发布阶段事件（`on_phase` / `on_retrieval`）
-- 通知完成（`on_reply_complete`）
-- 可选地触发记忆抽取钩子（默认关闭）
-
-Agent **不负责**：SQL、SQLite schema、UI 渲染、TTS 引擎实现、音频播放、第三方模型内部逻辑。
-
-### 2.3 Graceful Degradation
-
-> 可选能力故障不应该摧毁聊天核心能力。
-
-```
-Memory failed      → chat continues
-Knowledge failed   → chat continues
-TTS failed         → text still works
-Embedding missing  → hash fallback, still runnable
-Extraction fails   → candidate discarded, conversation does not crash
-```
-
-辅助能力应该**增强** Agent，而不是成为 Agent 正常运行的单点故障。
-
-### 2.4 Local-first, not local-LLM
-
-根据当前实现与 [ROADMAP.md](ROADMAP.md)：
-
-- **LLM**：DeepSeek API（云端推理）
-- **Embedding**：本地 `bge-small-zh-v1.5`（CPU，可选；缺失时回退 stdlib 哈希）
-- **Memory**：SQLite（本地持久化）
-- **Knowledge**：Markdown（本地语料）
-- **UI**：Flet（本地桌面）
-
-不要把项目描述成「完全离线 Agent」。更准确地说：
-
-> **Local-first application with cloud LLM inference and local persistent state.**
-
-最小运行依赖见 [requirements.txt](requirements.txt)：Flet、requests、python-dotenv、PyYAML，以及测试用的 pytest。
+分开的原因：陪聊要低延迟、不能因为"审批弹窗"卡住；行动要可审计、可取消、可回滚。
+把两者混成一条链，最后一定会在某个地方互相拖累。
 
 ---
 
-## 3. Architecture Overview
+## 4. 一次对话的生命周期
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         Flet UI                             │
-│   Chat / Persona / Memory / Settings / Skin / Voice          │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ callbacks / state
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                         Agent                               │
-│                    orchestration layer                      │
-│                                                             │
-│ input → retrieval → prompt assembly → LLM → persist         │
-│                 │                                           │
-│                 ├──────── Memory  (MemoryManager)            │
-│                 ├──────── Knowledge (KnowledgeManager)       │
-│                 ├──────── Persona  (PersonaManager)          │
-│                 └──────── Emotion  (detect_emotion)          │
-└─────────────┬─────────────────────┬─────────────────────────┘
-              │                     │
-              ▼                     ▼
-      ┌──────────────┐       ┌───────────────┐
-      │ MemoryManager│       │KnowledgeManager│
-      └──────┬───────┘       └──────┬────────┘
-             │                      │
-             ▼                      ▼
-      ┌──────────────┐       ┌───────────────┐
-      │ SQLite Store │       │ Markdown Corpus│
-      └──────────────┘       └───────────────┘
+### 4.1 快路径
 
-                            │
-                            ▼
-                     ┌──────────────┐
-                     │  LLMClient   │  (DeepSeek, OpenAI-compatible)
-                     └──────────────┘
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant UI as ChatArea
+    participant AG as Agent
+    participant CA as ContextAssembler
+    participant M as MemoryRetriever
+    participant K as KnowledgeRetriever
+    participant L as DeepSeek
 
-                            │
-                            ▼
-                     ┌──────────────┐
-                     │ TTS Adapter  │  (external GPT-SoVITS process)
-                     └──────────────┘
+    U->>UI: 输入
+    UI->>AG: reply(text)
+    AG->>CA: assemble(query)
+    CA->>M: retrieve_outcome(query)
+    M-->>CA: hits + status
+    CA->>K: retrieve_outcome(query)
+    K-->>CA: hits + status
+    CA-->>AG: 九段 system prompt + metadata
+    AG->>L: stream_chat
+    L-->>AG: token 流
+    AG-->>UI: 增量渲染
+    AG->>AG: 落库 + 记忆抽取（异步）
 ```
 
-依赖方向：UI → Agent → 各领域管理器 → 存储/语料；UI 与领域管理器之间只通过事件/回调通信，UI 不理解 Memory/Knowledge 内部实现。
+关键点：
+
+- **检索先于生成**，但检索失败不阻断生成（降级为空块 + 状态标记）。
+- **提示词九段顺序固定**：身份 → 关系 → 行为 → 情绪 → 记忆 → 知识 → 技能 → 时间 → 输出约束。
+  顺序有测试锁死（`test_system_prompt_byte_equivalent`），改动会立刻被发现。
+- **分数绝不进提示词**：记忆/知识只给正文与出处，不给相似度——防注入，也防模型"照着分数编"。
+
+### 4.2 任务路径
+
+```
+用户目标
+  → Router 判定（聊天 / 任务 / 联网）
+  → AgentRuntime.start()
+  → 模型决定：直接答 / 调工具
+  → Validator 校验参数
+  → Permission 判定（L0/L1 放行，L2 审批，L3 拒绝）
+  → Executor 执行
+  → Observation 回填
+  → 循环直到完成 / 失败 / 取消
+```
+
+每一步都写 `agent_run_step`——**"模型可见 ⟺ 已记录"**。事后可以完整复盘一次任务里
+模型看到了什么、做了什么、拿到了什么。
 
 ---
 
-## 4. Agent Core
+## 5. 行动系统
 
-`core/agent.py` 的当前职责（来自其 docstring）：
+### 5.1 工具协议
 
-> Persona loading → prompt building → streaming LLM → short-term history → MemoryManager persistence.
+```python
+@dataclass(frozen=True)
+class ToolSpec:
+    name: str
+    description: str
+    parameters: dict          # JSON Schema
+    permission: PermissionLevel
+    handler: Callable
+```
 
-`Agent.__init__` 的可选能力（均为依赖注入，缺省即降级）：
+四道关：**Schema 校验 → 参数校验 → 权限判定 → 执行**。
+任何一道失败都返回结构化错误，不抛异常给模型——模型需要看到"为什么失败"才能改正。
 
-| 参数 | 作用 |
+### 5.2 权限分级
+
+| 级别 | 含义 | 行为 |
+|---|---|---|
+| L0 | 纯读、无副作用（时间、计算） | 直接放行 |
+| L1 | 白名单内的低风险写 | 注册即授权 |
+| L2 | 有副作用（建任务、改提醒） | **必须审批**，fail-closed |
+| L3 | 高危（删除、外部写） | 首版一律拒绝 |
+
+"fail-closed" 的意思是：**没有审批器时，L2 默认拒绝**，而不是默认放行。
+这条在 `permissions.py` 里是一行显式判断，不依赖调用方记得传审批器。
+
+### 5.3 任务与提醒
+
+- `assistant_task`：标题、描述、到期时间、优先级、状态、`notified_at`。
+- 到期提醒用 `notified_at` 做**至多一次**投递（at-most-once）：领到就写，重启不会重复打扰。
+- 取消是**状态变更**，不是物理删除——审计需要。
+
+---
+
+## 6. 联网与研究会话
+
+### 6.1 服务端工具的两条硬约束（实测，不是文档）
+
+| 约束 | 证据 |
 |---|---|
-| `persona` | 角色配置（Persona 对象） |
-| `llm` | LLM 客户端（流式生成） |
-| `history_limit` | 短期历史轮数上限 |
-| `memory` | `MemoryManager`；为 `None` 时退化为纯内存、不落盘 |
-| `knowledge` | `KnowledgeManager`；为 `None` 时不做知识检索 |
-| `on_phase` | 阶段事件回调（`retrieving` / `reasoning` / `responding`） |
-| `on_retrieval` | 检索命中回调（供记忆面板等 UI 消费） |
-| `on_reply_complete` | 回复完成通知（含被停止后的部分回复） |
-| `extraction engine` | 记忆抽取引擎（可选） |
-| `extract_auto` | 是否每轮自动抽取候选（**默认 `False`**，钩子 dormant） |
-| `memory_top_k` / `knowledge_top_k` | 每轮注入提示词的相关条数 |
+| 带服务端工具的请求，**首条非 system 消息必须是 user** | 同样非法序列：普通请求 200，带工具 400 |
+| 页面正文不在 `data` 里，加密在 `signature` 中 | `data` 恒为空串；不回传则页面丢失 |
 
-> README 不是 API reference。重点在于：`Agent` 只做决策与编排，把「记忆/知识/人格/情绪」当作可替换的上下文来源组装进 Prompt。
+第一条由 `Agent._window()` 归一化 + `core/protocol_guard.py` 兜底；
+第二条由**研究会话**解决。
+
+### 6.2 研究会话（schema v6）
+
+```mermaid
+stateDiagram-v2
+    [*] --> continued: 有会话且完整性检查通过
+    [*] --> restarted: 有会话但不可用
+    [*] --> blocked: 不可用且关闭自动重启
+    continued --> [*]
+    restarted --> [*]
+    blocked --> [*]
+```
+
+- `continued`：消息序列 = `[user(上轮), assistant(含 server_tool_calls), user(本轮)]`。
+- `restarted`：不塞无协议历史，重新检索，卡片标注"已重新检索"。
+- `blocked`：不发起请求，提示用户重新提问（仅 `RESEARCH_SESSION_AUTO_RESTART=0`）。
+
+**为什么值得一张表**：实测发现，丢 `signature` 不会让答案变错，而是让模型**静默重搜**——
+成本翻倍、来源可能漂移，用户完全看不出来。这比报错危险。
 
 ---
 
-## 5. Conversation Lifecycle
+## 7. 记忆系统
 
-一轮回复的实际流程（依据 `core/agent.py` 与 [ROADMAP.md](ROADMAP.md)）：
-
-```
-User Input
-    │
-    ▼
-Append Short-Term History
-    │
-    ▼
-Persist User Turn
-    │
-    ▼
-Memory Retrieval ──┐
-    │               ├──── failure → degrade / continue
-    ▼               ┘
-Knowledge Retrieval ──┐
-    │                  ├──── failure → degrade / continue
-    ▼                  ┘
-Emotion Detection (detect_emotion, local heuristic)
-    │
-    ▼
-Relationship / Persona Runtime
-    │
-    ▼
-PromptBuilder (identity → … → memory → relationship → emotion → behavior → speech → safety)
-    │
-    ▼
-LLM Streaming
-    │
-    ▼
-UI receives stream
-    │
-    ▼
-Persist assistant response
-    │
-    ▼
-Optional extraction hook (dormant unless extract_auto=True)
-    │
-    ▼
-on_reply_complete  (notification only)
-```
-
-**重要边界**：`on_reply_complete` 只是**通知事件**，不负责 TTS。当前 `core/agent.py` 明确冻结了这个边界——语音播报由 UI / 独立的 TTS 层处理，Agent 核心不持有播放器。
-
----
-
-## 6. Prompt Architecture
-
-当前 `core/prompt_builder.py` 的注入顺序（固定，减少 Persona Drift）：
-
-```
-Identity
-  → Perspective / Values
-    → Knowledge
-      → Memory
-        → Relationship
-          → Emotion
-            → Behavior
-              → Speech / Language
-                → Safety / Shield
-```
-
-- **为什么人格在上下文之前？** 项目试图减少「长上下文 / 检索结果导致 Persona Drift」。
-- **为什么 Knowledge 和 Memory 分开？** 因为 Knowledge = 静态角色/世界信息（设定），Memory = 用户特定经历（经验），两者来源、生命周期、可信度、权限都不同。
-- 检索结果进入 Prompt 时使用**明确的定界符包裹**（见 §13），检索分数本身不注入模型上下文。
-
----
-
-## 7. Memory Architecture
-
-当前 Memory schema（`core/memory/store.py`，`SCHEMA_VERSION = 3`）包含六张核心表：
-
-| 表 | 内容 |
-|---|---|
-| `conversation` | 短期对话轮次 |
-| `memory` | 长期记忆正表（经闸门确认后写入） |
-| `user_profile` | 用户侧画像（与记忆分表） |
-| `persona_state` | **Agent 自身状态**（情绪、关系阶段、陪伴时长等），与用户记忆**严格分表** |
-| `memory_blacklist` | 记忆控制黑名单（memory_control） |
-| `memory_candidate` | 抽取候选队列（人工/显式确认后才转正） |
-
-> 关系状态存于 `persona_state`，**不属于** `memory`——避免关系状态污染用户经历记忆。
-
----
-
-## 8. Short-term vs Long-term Memory
-
-```
-Short-term history  ──►  当前 LLM context
-Long-term Memory    ──►  SQLite ──► retrieval ──► relevant memory block
-```
-
-两者不是同一个东西：
-
-- **短期**：为当前模型上下文服务（受 `HISTORY_LIMIT` 控制）。
-- **长期**：为跨会话持续记忆服务（SQLite 持久化，可检索）。
-
-关闭长期记忆（`MEMORY_ENABLED=0`）即退回纯内存模式，本地不留任何对话记录。
-
----
-
-## 9. Memory Retrieval
-
-当前检索使用**混合评分**（`core/memory/retrieval.py`）：
+### 7.1 五通道打分
 
 ```
 score = 0.40·vector + 0.20·keyword + 0.15·recency + 0.15·importance + 0.10·confidence
 ```
 
-| 通道 | 权重 | 说明 |
+| 通道 | 解决什么 |
+|---|---|
+| vector | 语义相近（"准备考试" ↔ "复习"） |
+| keyword | 专名、项目名（小模型最容易糊掉的部分） |
+| recency | 最近发生的事自然浮上来 |
+| importance | 重要事实优先被想起 |
+| confidence | 用户确认过的更可信 |
+
+### 7.2 相关性闸门（关键修复）
+
+**问题**：`recency / importance / confidence` 是"记忆自身的属性"，不是"与问题的相关性"。
+它们会给每条记忆垫底分，导致 `top_k` **永远被填满**——问"明天湛江天气"，返回 5 条无关记忆，
+第一条是"21 岁生日"。
+
+**数据**（23 条真实提问，`docs/2x/lab/calibrate_memory.py`）：
+
+| 名次 | 最低分 | 中位 |
 |---|---|---|
-| vector | 0.40 | 语义相似度（需 Embedding；缺失时该通道权重归零并重归一化） |
-| keyword | 0.20 | 专名/关键词重叠（人名、项目名恰恰是陪伴场景的高信号） |
-| recency | 0.15 | 新近性，让「最近的事」自然浮上来 |
-| importance | 0.15 | 重要事实优先被想起（1..10 线性映射到 [0,1]） |
-| confidence | 0.10 | 可信度（1..5 线性映射到 [0,1]） |
+| 第 1 名 | 0.429 | 0.472 |
+| 第 8 名 | 0.300 | 0.339 |
 
-> 纯语义相似度不一定等于「值得记住」。长期陪伴场景中，新近性、重要性、置信度同样重要。
+所有名次都 ≥0.30，`min_score=0.05` 从未过滤任何东西。
 
-当向量通道缺失（无 embedding runtime / 网络 / 模型）时，权重会**重新归一化**降级，而不是整次检索抛异常。
+**修法**：证据闸门——`vector ≥ 0.50` 或 `keyword ≥ 0.20` 才进入候选；先验只参与排序。
 
----
+**效果**：命中数 184 → 63，无关查询 0 条，相关查询仍 4–5 条。
 
-## 10. Embedding Layer
+### 7.3 写入闸门
 
-`core/memory/embedder.py` 当前支持：
+不是每句话都值得记。抽取引擎输出候选后，经过：
 
-- 默认模型 `BAAI/bge-small-zh-v1.5`（约 33M 参数，CPU 推理毫秒级，不占显存）
-- `device` 默认 `cpu`
-- **backend 可替换**：`auto` / `local` / `hashing`
-- **stdlib 哈希回退**：`hashlib.blake2b` 稳定哈希（`digest_size=8`）
-
-```
-Embedding interface
-       │
-       ├── Local BGE  (sentence-transformers，可选安装)
-       └── Hash fallback (纯 stdlib，离线 / CI 可用)
-```
-
-> fallback 不是为了提供相同质量，而是为了保证在**没有 embedding runtime / 网络 / 模型**时，系统仍拥有可测试、可运行的 deterministic behavior。
-
-说明：本地 BGE 后端依赖 `sentence-transformers`（不在最小 `requirements.txt` 中，需按需安装）；`EMBEDDING_BACKEND=auto` 在该依赖缺失时自动回退到哈希。
+1. 类型判定（fact / preference / event / relationship）；
+2. 去重（同类型 + 相似内容合并，提升 confidence）；
+3. 黑名单（用户明确不让记的内容，检索层还有第二道拦截）；
+4. 重要性阈值（低于阈值只留在对话里，不进长期记忆）。
 
 ---
 
-## 11. Memory Gate
+## 8. 知识 RAG
 
-这是项目的核心安全设计之一（`core/memory/extraction_engine.py` + `core/memory/store.py`）：
+### 8.1 语料与切块
 
-```
-Conversation
-     ▼
-Extraction Engine   (LLM 提议候选)
-     ▼
-Candidate           (写入 memory_candidate 闸门，不直写正表)
-     ▼
-Human / explicit confirmation   (🧹 整理记忆 或 API confirm)
-     ▼
-memory             (转正后可被检索)
-```
+- 语料：`knowledge/*.md`（角色设定）+ 可选 `docs/2x`（项目文档，`KNOWLEDGE_EXTRA_DIRS`）。
+- 切块：按 Markdown 标题边界，一块 = 一个标题到下一个标题；chunk id 稳定（`文件::序号`）。
+- 出处随块走：命中时提示词里带 `（来源 › 标题）`，方便人工校订。
 
-- 抽取引擎只把候选写入 `memory_candidate`，**绝不直写正表**（源码守卫）。
-- `extract_auto` 默认 `False`：钩子存在但 **dormant**，手动整理优先。
-- 真实 LLM 抽取 Provider 已通过 seam 接入（测试使用 FakeLLM），真实 DeepSeek 抽取（ROADMAP M4）仍待做。
+### 8.2 检索：默认向量，混合可选
 
-> **LLM may propose memory; it does not unilaterally commit memory.**
-
----
-
-## 12. Knowledge RAG
-
-`core/knowledge/` 当前结构：
-
-```
-core/knowledge/
-├── loader.py       # Markdown → 结构化 KnowledgeChunk
-├── retriever.py    # 产生 KnowledgeHit（两通道：vector 0.7 + keyword 0.3）
-└── manager.py      # loading / retrieval / rendering / graceful degradation
-```
-
-公开语料（`knowledge/`）为中性示例：
-
-```
-knowledge/
-├── assistant_world.md
-├── relationship_notes.md
-├── speaking_style.md
-└── values.md
-```
-
-- **Loader**：把 Markdown 切成结构化 chunk。
-- **Retriever**：产生 `KnowledgeHit`，采用**两通道混合**（vector 0.7 + keyword 0.3），与 Memory 的五通道刻意不同（两者语料、生命周期、权限不同）。
-- **Manager**：负责加载、检索、渲染，并在语料目录缺失时自动关闭知识检索（不报错）。
-
----
-
-## 13. Knowledge / Memory Injection Boundary
-
-检索结果进入 Prompt 时进行明确的定界符包裹：
-
-```
-【角色知识】
-...
-【相关用户记忆】
-...
-```
-
-> 检索结果进入 Prompt 时进行明确的 delimiter wrapping；retrieval score 不直接注入模型上下文，避免将内部检索元数据暴露成 Prompt 内容，并减少不必要的提示词注入面。
-
-这是 [ROADMAP.md](ROADMAP.md) 明确记录的设计原则，也是 Knowledge 与 Memory 物理隔离在 Prompt 层的延续。
-
----
-
-## 14. Persona Engine
-
-`core/persona/` 当前结构：
-
-```
-core/persona/
-├── persona.py           # Persona 数据对象
-├── loader.py            # 从 config/persona/*.yaml 加载
-├── behavior_rules.py    # 行为规则
-├── relationship.py      # 关系状态系统
-└── persona_manager.py   # PersonaManager
-```
-
-兼容旧 import（兼容性门面，避免重构破坏旧调用方）：
-
-```python
-from core.persona import Persona
-from core.persona import load_persona
-from core.persona import PersonaManager
-```
-
-配置来自 `config/persona/`：`identity.yaml` / `behavior.yaml` / `relationship.yaml` / `speech.yaml`。公开仓库中的人格为**中性示例人格**，不绑定任何第三方 IP。
-
----
-
-## 15. Relationship Engine
-
-`core/persona/relationship.py` 维护关系状态（`trust` / `stage`），**独立于 Memory**（存于 `persona_state`）。
-
-示例阶段（配置驱动，可在 `relationship.yaml` 中自定义）：
-
-```
-初识 → 熟悉 → 信任 → 深度陪伴
-```
-
-- `stage` 仅作为「背景事实」注入提示词（【与用户的关系】），**绝不控制语气**——语气由 `speech.yaml` 决定。
-- 避免使用「家人」之类会改变产品语义的阶段。
-- 关系状态描述的是关系状态，**不直接决定对话语气**。
-
-> 当前 `stage` 为静态读取（默认 `trust=70`）；`set_trust` / `bump` 方法已就位但**自动涨跌未实现**（属未来阶段）。
-
----
-
-## 16. Emotion System
-
-`core/emotion.py` 当前实现为**轻量规则 / 关键词判定**：
-
-- 本地、零额外 LLM 调用、可解释、低资源友好
-- `detect_emotion(user_text)`：关键词表判定，优先级 `worried > happy > thinking > calm`
-- `emotion_block(emotion)`：生成注入 Prompt 的情绪块
-- `core/agent.py` **每轮自动调用** `detect_emotion` 并把情绪块注入 Prompt，同时把当前情绪持久化到 `persona_state.emotion`（系统状态表，与用户记忆分表）
-
-```
-Emotion ──► UI state / Skin mapping
-Emotion ──► Prompt context
-```
-
-> 当前实现是**轻量启发式**，不是完整情绪模型。更丰富的情绪模型属于未来规划（见 Roadmap 🔵）。
-
-重要边界：**Emotion 与 Skin 单向关联**——情绪可以决定皮肤，但 Skin 不反向影响 Agent 行为（见 §19）。
-
----
-
-## 17. UI Architecture
-
-依据 [UI_DESIGN.md](UI_DESIGN.md)：
-
-核心产品理念：**从 Conversation 到 Presence**——让用户看到 Assistant 的 presence、state、trust、memory 与长期关系，而不只是聊天窗口。
-
-```
-Header
-├── Persona / Status
-├── Chat
-└── Memory
-```
-
-设计契约（来自 UI 设计文档）：
-
-- **desktop-first**，固定最小宽度 **960 × 640**
-- 默认窗口 **1180 × 760**
-- 三栏比例 **260（固定） : 1fr（弹性） : 300（固定）**
-- **舰桥美学**是默认全站基调，不做独立主题开关（窄屏不降级，仅出横向滚动条）
-
----
-
-## 18. Thinking / Phase Events
-
-`on_phase` 当前阶段：
-
-```
-retrieving → reasoning → responding
-```
-
-UI 可根据阶段展示「Assistant 正在整理你的话……」以及检索状态。
-
-> **UI 只消费 Agent 发出来的数据/事件，不负责理解 Memory/Knowledge 内部实现。**
-
----
-
-## 19. Skin Architecture
-
-`ui/design/skin.py` 的当前机制：
-
-```
-Skin ├── Colors
-     ├── Avatar
-     └── Background
-```
-
-Skin 是 **UI 层对象**。核心规则：
-
-> **Skin does not control Agent behavior.**
-
-```
-Agent Emotion
-   ▼
-SkinManager.skin_for_emotion()
-   ▼
-Selected Skin
-```
-
-- `ui_skin = auto`：情绪 → 皮肤映射（`EMOTION_TO_SKIN`），情绪超过 **24h** 失效回落默认皮肤
-- `ui_skin = <id>`：强制指定皮肤
-- 未知 id / 映射缺失时回落默认皮肤（fallback）
-- 启动期一次性应用主题（`theme.apply_skin`），运行期换肤重启生效
-- 公开仓库当前仅含一套中性 `example` 皮肤；新增皮肤只需在 `resources/skins/<id>/` 下放置 `avatar.png` / `background.jpg` / `skin.json`
-
-```
-Emotion → SkinManager → Skin Profile   (单向)
-不存在：Skin → LLM behavior
-```
-
----
-
-## 20. Voice Architecture
-
-实际边界：
-
-```
-UI / Future Agent action
-       ▼
-TTS Interface
-       ▼
-External TTS backend  (GPT-SoVITS 独立进程)
-       ▼
-audio
-       ▼
-Player
-```
-
-> **Agent Core 不直接持有播放器，也不直接依赖 GPT-SoVITS 内部实现。**
-
-当前公开仓库只提供 **interface / adapter / profile schema**（`core/tts/`），第三方模型权重不入库，模型路径通过环境变量 / 用户本地配置提供。详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
----
-
-## 21. Configuration
-
-配置来自 `.env.example`（复制为 `.env` 后填写）。当前字段：
-
-```
-DEEPSEEK_API_KEY      # 你的 DeepSeek Key（必填，项目不附带）
-DEEPSEEK_BASE_URL     # OpenAI 兼容接口地址
-DEEPSEEK_MODEL        # 模型名
-TEMPERATURE           # 生成温度
-MAX_TOKENS            # 最大生成 token
-TIMEOUT               # 请求超时
-HISTORY_LIMIT         # 短期记忆轮数上限
-MEMORY_ENABLED        # 是否启用 SQLite 长期记忆
-MEMORY_DB_PATH        # 内存数据库路径
-EMBEDDING_BACKEND     # auto / local / hashing
-EMBEDDING_MODEL       # 嵌入模型名
-EMBEDDING_DEVICE      # cpu / cuda
-MEMORY_TOP_K          # 每轮注入记忆条数
-KNOWLEDGE_DIR         # 知识语料目录
-KNOWLEDGE_TOP_K       # 每轮注入知识条数
-TTS_VOICE             # 语音档案名（对应 core/tts/voice_profiles/<name>.yaml）
-TTS_TEXT_LANG         # 合成语言
-TTS_ENABLED           # 语音总开关
-UI_SKIN               # auto / 具体皮肤 id
-```
-
-> **`.env` never belongs in Git.**（已在 `.gitignore` 中忽略）
-
----
-
-## 22. Failure Handling
-
-| 故障 | 行为 |
+| 模式 | 说明 |
 |---|---|
-| Memory unavailable | 对话继续（退化为纯内存） |
-| Knowledge unavailable | 对话继续（不做知识检索） |
-| Embedding backend unavailable | 回退哈希行为，系统仍可运行/测试 |
-| TTS unavailable | 文本对话仍然可用 |
-| Extraction fails | 候选被安全丢弃，对话不崩溃 |
-| Storage errors | 设置 degraded 状态并尽可能继续 |
+| `hybrid=0`（默认） | 向量余弦 + 朴素关键词加权 |
+| `hybrid=1` | 向量 + BM25 双路召回，RRF 融合（需要 `rank_bm25`） |
 
-这是项目长期可用性的关键之一：**可选服务优雅降级，聊天核心不被拖垮**。
+**混合检索的评测结论是"暂不启用"**（诚实记录）：
 
----
+| 系统 | R@5 | R@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| dense | 0.750 | 0.750 | **0.646** | **0.672** |
+| hybrid | 0.750 | 0.792 | 0.624 | 0.665 |
+| BM25-only | 0.667 | 0.667 | 0.548 | 0.576 |
 
-## 23. Testing Philosophy
+R@10 +4.2pp，但排序略降；在 24 条查询、152 块语料上属噪声范围。
+原因：本机装不上 jieba（退化为字符二元组）、语料同主题重复、BM25 在小语料 IDF 退化。
+代码保留 jieba 分支，装上即生效。
 
-> This project treats tests as **architecture guards** rather than only regression tests.
+### 8.3 知识侧为什么没有闸门
 
-测试覆盖：
+用同法校准后发现**不可分**：正例 top-1 最低 0.363，负例最高 0.590，间隔 −0.227；
+规则网格把向量门槛抬到 0.75，负例仍有 4/8 被收进来。
 
-- unit / integration / UI / memory gate / persistence / fallback / configuration / launcher / skin tests
-
-**测试基线（默认环境，未启动可选 GPT-SoVITS 服务）**：运行 `pytest` 得到 **276 passed, 9 skipped**。其中 9 个 skipped 包含 5 个 TTS 集成测试（`tests/test_tts_service.py` 的 `test_t1`–`test_t4` 与 `test_health_check_up`），它们需要一个在 `127.0.0.1:9880` 真实运行的 GPT-SoVITS API；该服务缺失时**自动跳过**（设计行为，避免把「服务没开」误判为代码回归）。
-
-> 若环境里存在该服务但配置不正确，这些集成测试会真实发起合成并返回失败——属于环境依赖，不是代码缺陷。README 不永久硬编码测试数字；每次更新都会重新运行 `pytest` 确认基线。
-
----
-
-## 24. Architecture Guardrails
-
-已确定的架构红线：
-
-1. **Agent = orchestration, not execution location.**
-2. Core 不应该 import UI。
-3. `TTSService` 不应该知道 Agent / UI。
-4. Memory Core 不直接操作 Flet。
-5. Skin 只属于 UI。
-6. 真实用户数据不进入公开仓库。
-7. Optional services degrade gracefully.
-8. 不要为了未来可能发生的需求提前引入复杂框架。
+原因：语料全是同一项目的文档，"技术相关"的话天然接近；而余弦衡量的是"话题接近"，
+不是"能否回答"。结论：**知识侧要提升精度，得靠 cross-encoder（reranker），而不是继续调阈值**。
+详见 `docs/2x/KNOWLEDGE_RETRIEVAL_CALIBRATION.md`。
 
 ---
 
-## 25. 为什么现在不用 DI Framework / Microservices / Vector DB
+## 9. 上下文组装
 
-当前**有意不做**以下事，原因在架构层面：
+`ContextAssembler` 是认知系统的**唯一出口**，只做组装：不调工具、不请求模型、不碰 UI。
 
-- **Dependency Injection Framework**：手工构造 + Composition Root 已足够；DI 框架增加认知与运行时成本，收益不大。
-- **UI Framework Replacement**：问题在分层，不在 Flet；换 UI 框架不应改变领域层。
-- **Microservices**：桌面单机应用没有必要；GPT-SoVITS 独立进程**只因为它自身包含 GPU/CUDA runtime**——这是 runtime boundary，不是把项目服务化。
-- **Database migration framework**：SQLite 当前足够，手写 `SCHEMA_VERSION` 迁移可控。
-- **sqlite-vec / 向量库**：当前 Memory 检索使用 brute-force cosine + 混合加权；若语料增长到需要，再引入向量索引——这是后续性能优化点，不是当前必要重构。
+九段提示词（顺序由测试锁死）：
 
----
+```
+① 身份      ② 关系      ③ 行为准则
+④ 情绪      ⑤ 记忆块    ⑥ 知识块
+⑦ 技能目录  ⑧ 当前时间  ⑨ 输出约束
+```
 
-## 26. Development Roadmap
+设计要点：
 
-状态以当前 `master` 源码 + 测试为准（对照 [ROADMAP.md](ROADMAP.md)）。
-
-### ✅ Implemented
-
-- Core Agent（编排层）
-- Persona Engine
-- Long-Term Memory（SQLite）
-- Memory Retrieval（五通道混合评分）
-- Memory Gate（候选队列 + 确认/拒绝 API + 源码守卫；LLM 抽取 seam 已接入，默认 dormant）
-- Knowledge RAG（loader / retriever / manager，两通道）
-- Relationship State（存储 + 阶段注入；自动 trust 涨跌未实现）
-- Flet Presence UI（三栏 + 舰桥基调）
-- Skin System（auto / 指定 / 情绪映射 / 24h 过期 / fallback）
-- Emotion detection（轻量关键词启发式，每轮自动调用并持久化）
-
-### 🟡 Partial / In Progress
-
-- Memory conflict resolution（冲突/置信度行为）
-- Real BGE semantic recall verification（真实语义召回验证）
-- sqlite-vec optimization（向量索引优化）
-- UI polish
-- Real LLM-based auto extraction（ROADMAP M4）+ Memory Gate UI panel（M3）
-
-### 🔵 Future / Planned
-
-- Tool orchestration
-- TurnPipeline
-- Proactive behavior（主动行为）
-- ActionPlan
-- Streaming TTS
-- Richer emotion model
-
-> 不要把未来写成已经实现。上述 ✅ 项均为当前代码已落地能力；🟡 为部分实现/进行中；🔵 为规划。
+- **Persona 固定注入，不参与检索排序**——人格不能被"相关性"决定。
+- 记忆与知识分别成块，**互不混入**（`【相关用户记忆】` / `【角色知识】`）。
+- 块内只给正文与出处，**不给分数**。
 
 ---
 
-## 27. Privacy / Open Source Boundary
+## 10. 可观测性：让"坏了"能被看见
 
-公开仓库包含：
+历史上最严重的一次故障：`sentence-transformers` 因依赖漂移无法导入，
+`_embed_all()` 捕获异常返回 `[]` → 知识检索**恒为空**，记忆向量通道降级。
+界面上只是"没有参考"，潜伏了数天。
 
-- architecture / code
-- tests
-- examples（示例人格、知识、皮肤、配置 schema）
-- 中性占位资源（程序生成的占位头像/壁纸）
+现在有两层防线：
 
-**不公开**：
+### 10.1 启动探针
 
-- API keys / tokens
-- user memory（真实记忆数据库）
-- real conversations（真实聊天记录）
-- personal persona（私人人格设定）
-- private skins（私人皮肤/壁纸）
-- private audio（私人语音/录音）
-- model weights（模型权重 / 语音模型）
-- copyrighted assets without redistribution rights（无再分发权的版权素材）
+`embedder.probe()` 真的跑一次 `encode`（不是"包能不能 import"），失败时在聊天区明确提示
+"检索不可用"。只提示一次，健康时静默。
 
-详细安全策略见 [SECURITY.md](SECURITY.md)；第三方依赖与许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；许可证见 [LICENSE](LICENSE)。
+### 10.2 四态检索 + Trace
 
----
-
-## 28. Third-party Dependencies
-
-| Dependency | Purpose |
+| 状态 | 含义 |
 |---|---|
-| Flet | Desktop UI |
-| requests | HTTP / LLM / 外部服务通信 |
-| python-dotenv | 环境变量配置 |
-| PyYAML | YAML 配置 / Persona 加载 |
-| pytest | 测试 |
+| `SUCCESS` | 正常且有命中 |
+| `NO_RELEVANT_RESULTS` | 链路正常，但没内容过门槛（**正常结果**） |
+| `DEGRADED` | 部分可用（如嵌入挂了，只剩关键词） |
+| `FAILED` | 检索本身出错 |
 
-Embedding 本地 BGE 后端可选依赖 `sentence-transformers`（不在最小 `requirements.txt`）。
-GPT-SoVITS 与 DeepSeek 为**外部服务**，不随仓库再分发——前者经环境变量指向本地进程，后者经 API 调用。
-
-> 依赖许可证与「外部服务不随仓库分发」的声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。当前依赖版本见 [requirements.txt](requirements.txt)。
+`RetrievalTrace` 记 `status / hits / candidates / top_score / duration_ms`，
+**不记 query 原文、不记正文、不落盘**。`degraded_ratio()` 可以直接回答
+"最近是不是经常降级"。
 
 ---
 
-## 29. Quick Start
+## 11. 数据与迁移
 
-```bash
-# 1. 虚拟环境
+单文件 SQLite（WAL），schema 当前 **v6**：
+
+| 版本 | 内容 |
+|---|---|
+| v1 | conversation / memory / user_profile / persona_state / blacklist |
+| v2 | memory_candidate（候选记忆） |
+| v3 | 记忆条目扩展字段 |
+| v4 | agent_run / agent_run_step / assistant_task |
+| v5 | `assistant_task.notified_at`（提醒至多一次） |
+| v6 | research_session（研究会话协议状态） |
+
+迁移策略：
+
+- **逐版本推进**，每步单独提交并写 `user_version`——中途失败不会停在"表建了一半但版本已最新"。
+- **升级前备份**（仅当库里已有表；空库不产生垃圾备份——这是测试发现的）。
+- `tests/test_migration_chain.py` 用**真实 v1 库**验证 v1 → v6：数据行数、关键字段、
+  每一版新增的表与列都检查。
+
+---
+
+## 12. 工程实践
+
+| 维度 | 现状 |
+|---|---|
+| 测试 | **306 passed**（CI 覆盖的后端子集），48 个测试文件，约 8.7k 行 |
+| 代码 | 13.2k 行（`core/` + `ui/`） |
+| 分层 | 单元 / 集成 / UI 组件 / 协议 / 迁移，五类分开 |
+| CI | GitHub Actions：装依赖 → `pip check` → 后端子集（`hashing` 嵌入，不下载模型、不调 API） |
+| 评测 | 检索评测、记忆分布校准、协议冒烟，全部可复跑 |
+| 文档 | `docs/TECHNICAL_REPORT.md`（技术报告）+ `docs/2x/` 设计与实施记录 |
+
+**一个刻意的取舍**：真实 API 测试**不进 CI**。它花钱、受外部波动影响，进去只会让红绿失去意义；
+放在 `docs/2x/lab/protocol/live_smoke.py` 手动跑。
+
+---
+
+## 13. 失败矩阵
+
+| 故障 | 表现 | 系统行为 |
+|---|---|---|
+| 嵌入模型坏了 | 向量检索为空 | 启动提示 + 四态标 `DEGRADED`，关键词路兜底 |
+| 知识库目录缺失 | 无知识块 | 静默关闭知识检索，不影响聊天 |
+| 检索超时 | 无参考 | 降级为空块，本轮继续 |
+| 联网 400（序列非法） | 请求失败 | 错误分类文案；序列在本地已归一化 |
+| 模型不调工具 | 卡片空白 | 卡片明确写"模型未调用搜索"，不假装成功 |
+| 工具审批无人处理 | L2 卡住 | fail-closed：直接拒绝，不默认放行 |
+| 任务执行中崩溃 | Run 中断 | 状态置 failed，step 可复盘 |
+| 会话过期 | 无法延续 | `restarted`，卡片标注"已重新检索" |
+
+---
+
+## 14. 配置
+
+```env
+# 模型
+DEEPSEEK_API_KEY=sk-...
+MODEL=deepseek-chat
+DEEPSEEK_THINKING=off          # off=低延迟陪聊
+
+# 能力开关（默认全关，按需打开）
+RUNTIME_ENABLED=0              # ⚡ 任务模式
+WEB_TOOLS_ENABLED=0            # 🌐 联网
+SCHEDULER_ENABLED=0            # ⏰ 到期提醒
+SKILLS_ENABLED=0               # 技能目录
+
+# 记忆
+MEMORY_TOP_K=5
+MEMORY_MIN_VECTOR=0.50         # 相关性闸门（向量）
+MEMORY_MIN_KEYWORD=0.20        # 相关性闸门（关键词）
+
+# 知识
+KNOWLEDGE_TOP_K=4
+KNOWLEDGE_HYBRID=0             # 混合检索（评测无正收益，默认关）
+KNOWLEDGE_EXTRA_DIRS=          # 例：docs/2x
+
+# 研究会话
+RESEARCH_SESSION_ENABLED=1
+RESEARCH_SESSION_TTL_HOURS=24
+RESEARCH_SESSION_AUTO_RESTART=1
+```
+
+---
+
+## 15. 目录结构
+
+```
+core/
+├── agent.py              # 编排：检索 → 组装 → 生成 → 落库
+├── context.py            # ContextAssembler（九段提示词唯一出口）
+├── prompt_builder.py     # 模板与块拼接
+├── persona/              # 人格、关系、行为规则
+├── emotion.py            # 二维情绪检测与表达
+├── memory/               # 存储 / 五通道检索 / 嵌入 / 抽取 / 闸门
+├── knowledge/            # 语料加载 / 检索 / BM25 / 管理
+├── application/          # Facade / Router / Runner / 审批桥
+├── runtime/              # 状态机 / 事件 / Run 仓储
+├── tools/                # 协议 / 校验 / 权限 / 执行器 / 内置工具
+├── tasks/                # 任务仓储
+├── skills/               # SKILL.md 三级加载
+├── scheduler.py          # 到期提醒
+├── research_session.py   # 研究会话协议状态
+├── retrieval_status.py   # 检索四态
+├── retrieval_trace.py    # 轻量 trace
+└── protocol_guard.py     # 出站消息序列校验
+
+ui/
+├── app.py                # 装配根（Composition Root）
+└── components/           # 聊天区 / 输入栏 / 卡片 / 面板
+
+docs/                    # 技术报告 + 设计文档
+tests/                    # 55 个测试文件
+```
+
+---
+
+## 16. 技术债与路线图
+
+明确写出来，不藏。
+
+### 16.1 未完成的界面（本阶段已知技术债）
+
+| 位置 | 现状 | 影响 | 计划 |
+|---|---|---|---|
+| 检索状态展示 | 后端有 `last_retrieval_status` 与 trace，**界面只显示"参考 N 条"** | 降级时用户看不到"检索坏了" | UI 重做时加状态角标/提示条 |
+| 研究会话三态 | 卡片只加文字后缀（"延续/已重新检索"），**没有"重新检索"按钮** | `blocked` 状态无法自助恢复 | 随 UI 重做补交互 |
+| 知识库管理 | 无界面，只能改目录与 `.env` | 非技术用户无法维护语料 | 设置页加"知识库"面板 |
+| 记忆审阅 | 有后端接口与 Inspector，**无正式页面** | 用户无法直观纠正错误记忆 | 记忆管理页 |
+| 任务历史 | 有 `agent_run` 表与复盘数据，**无历史视图** | 只能看当前 Run | 任务详情页 |
+
+### 16.2 其他技术债
+
+1. **研究会话不跨重启续接**：`_active_id` 在内存里；重启后从新会话开始（协议仍在库中，但不自动拾取）。
+2. **知识侧没有证据闸门**：校准证明当前信号不可分，需 reranker。
+3. **语音只有 TTS 半边**：ASR 适配层未接，全双工未做。
+4. **MCP 未接**：工具来源仍是内置注册表；Adapter 设计已完成，未实现。
+5. **Files API 未做**：本地文档分析需要先定隐私边界（用户主动选择、只读、不自动入记忆）。
+6. **本仓库 UI 落后于后端**：任务面板、联网卡片、检索状态展示均未接入（见 §16.1）。
+
+### 16.3 路线图
+
+| 阶段 | 内容 |
+|---|---|
+| 近期 | UI 重做（含检索三态展示、记忆审阅、任务历史）、README/架构图同步公开仓库 |
+| 中期 | R2 reranker（先离线验证可分性）、ContextCandidate + Query Planner、Files API |
+| 长期 | 全双工语音、受控主动性（Standing Intent）、跨来源上下文协调 |
+
+---
+
+## 17. 运行
+
+```bat
 python -m venv .venv
-
-# Windows
 .venv\Scripts\activate
-
-# 2. 安装依赖
 pip install -r requirements.txt
 
-# 3. 配置
-cp .env.example .env
-#   编辑 .env，填入：DEEPSEEK_API_KEY=your_api_key_here
-
-# 4. 启动
+copy .env.example .env      :: 填入 DEEPSEEK_API_KEY
 python main.py
 ```
 
-> **DeepSeek API Key 必须由用户自行提供；项目不附带模型 key。**
-
-语音（🔊 朗读）为可选能力：需用户自备 GPT-SoVITS 运行时并通过环境变量/本地配置指定，仓库不含任何语音模型权重。
+首次启动会在 `data/amiya.db` 建库并迁移到 v6；`knowledge/` 放你的知识库 Markdown。
 
 ---
 
-## 30. Configuration Reference
+## 许可
 
-| Variable | Meaning | Default |
-|---|---|---|
-| `DEEPSEEK_MODEL` | LLM 模型 | `deepseek-chat` |
-| `TEMPERATURE` | 生成温度 | `0.9` |
-| `MAX_TOKENS` | 最大生成 token | `1024` |
-| `TIMEOUT` | 请求超时（秒） | `30` |
-| `HISTORY_LIMIT` | 短期对话轮数 | `20` |
-| `MEMORY_ENABLED` | 启用 SQLite 记忆 | `1` |
-| `MEMORY_DB_PATH` | 记忆数据库路径 | `data/assistant.db` |
-| `EMBEDDING_BACKEND` | 嵌入后端 | `auto` |
-| `EMBEDDING_MODEL` | 嵌入模型 | `BAAI/bge-small-zh-v1.5` |
-| `EMBEDDING_DEVICE` | 嵌入设备 | `cpu` |
-| `MEMORY_TOP_K` | 记忆检索条数 | `5` |
-| `KNOWLEDGE_DIR` | 知识语料目录 | `knowledge` |
-| `KNOWLEDGE_TOP_K` | 知识检索条数 | `4` |
-| `TTS_VOICE` | 语音档案名 | `assistant` |
-| `TTS_TEXT_LANG` | 合成语言 | `zh` |
-| `TTS_ENABLED` | 语音总开关 | `1` |
-| `UI_SKIN` | 皮肤 / auto | `auto` |
-
-具体值必须与当前 `.env.example` 保持同步。
-
----
-
-## 31. Example Extension
-
-项目为「可替换、可扩展」而设计：
-
-- **新增 Persona**：编辑 / 新增 `config/persona/*.yaml`
-- **新增 Knowledge corpus**：新增 `knowledge/*.md`
-- **新增 Skin**：在 `resources/skins/<skin-id>/` 放置 `avatar.png` / `background.jpg` / `skin.json`
-- **新增 LLM provider**：实现 LLM abstraction（`core/llm_client.py` 风格），**不要修改 Agent 核心**
-- **新增 TTS backend**：实现 Voice adapter，**不要让 Agent 直接 import 后端内部**
-
-> Architecture is designed for replacement and extension.
-
----
-
-## 32. Project Maturity
-
-> This is a personal research/development project.
-
-The architecture is intentionally evolving; some modules are stable foundations while others remain experimental or planned. The repository is most useful as **an architectural reference and an experimental long-term companion Agent implementation** — 而不是「生产级产品」。
-
----
-
-## 33. Philosophy
-
-Amiya Agent is built around a simple idea:
-
-> A long-term companion should not be defined only by the quality of a single response.
-
-It should **remember**.
-It should have a **stable identity**.
-It should distinguish what it **knows** from what it **experienced**.
-It should expose its **state** without pretending to be a human mind.
-And its architecture should remain **understandable** enough that a future version can still be changed safely.
-
-The project therefore treats Persona, Knowledge, Memory, Emotion and Agent orchestration as separate systems that evolve together without collapsing into one monolithic component.
-
-Made as a personal exploration into long-term AI companionship, memory architecture, and agent engineering.
-
----
-
-### 相关文档
-
-- [ROADMAP.md](ROADMAP.md) — 架构冻结文档 + 实际落地进度 + 未来方案
-- [UI_DESIGN.md](UI_DESIGN.md) — UI 设计契约（舰桥美学、三栏布局）
-- [SECURITY.md](SECURITY.md) — 安全与开源边界策略
-- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — 第三方依赖与许可证
-- [LICENSE](LICENSE) — MIT License
-- [docs/](docs/) — 更底层的架构 / 记忆数据流 / Persona / 抽取设计文档（实现细节留在 docs，不在 README 重复）
+MIT。角色与世界观素材版权归原作者所有，仓库内不含语音模型与参考音频。
