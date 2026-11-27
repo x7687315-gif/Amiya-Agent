@@ -6,7 +6,7 @@
 
 红线：
 - 只组装上下文，不调用工具、不请求 LLM、不碰 UI。
-- 检索块只给内容不给分数（防注入）；metadata 不放置信度/候选状态。
+- 检索块只给内容不给分数（防注入）；status 只进 metadata（供 UI/日志），不进提示词。
 - 记忆/知识检索失败只降级（返回空块 + 日志），不阻断对话——与原 reply 一致。
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 from core import emotion as _emotion
 from core.memory.retrieval import RetrievalHit
+from core.retrieval_trace import TRACE
 
 if TYPE_CHECKING:  # 避免循环导入；运行时只依赖协议方法
     from core.knowledge.manager import KnowledgeManager
@@ -80,13 +81,17 @@ class ContextAssembler:
         """
         # 记忆检索（原 agent.py:218-226）
         hits: List[RetrievalHit] = []
+        mem_outcome = None
         if self._memory is not None:
             if on_phase is not None:
                 on_phase("retrieving")
             try:
-                hits = self._memory.retrieve(query, top_k=self._memory_top_k)
+                mem_outcome = _retrieve_outcome(self._memory, query, self._memory_top_k)
+                hits = list(mem_outcome.hits)
             except Exception as e:  # noqa: BLE001 - 检索失败只降级
                 log.warning("记忆检索失败：%s", e)
+            if mem_outcome is not None:
+                TRACE.record("memory", mem_outcome)
         if on_phase is not None:
             on_phase("reasoning")
 
@@ -95,12 +100,16 @@ class ContextAssembler:
 
         # 知识块（原 :236-244）
         knowledge_block = ""
+        kn_outcome = None
         if self._knowledge is not None:
             try:
-                khits = self._knowledge.retrieve(query, top_k=self._knowledge_top_k)
+                kn_outcome = _retrieve_outcome(self._knowledge, query, self._knowledge_top_k)
+                khits = list(kn_outcome.hits)
             except Exception as e:  # noqa: BLE001
                 log.warning("知识检索失败：%s", e)
                 khits = []
+            if kn_outcome is not None:
+                TRACE.record("knowledge", kn_outcome)
             if khits:
                 knowledge_block = self._knowledge.render_block(khits)
 
@@ -124,5 +133,44 @@ class ContextAssembler:
             system_prompt=system_prompt,
             hits=hits,
             emotion=current_emotion,
-            metadata={"source": "context_assembler", "knowledge_used": bool(knowledge_block)},
+            metadata={
+                "source": "context_assembler",
+                "knowledge_used": bool(knowledge_block),
+                # 检索状态（仅供 UI/日志：区分"没检索到"与"检索坏了"）
+                "retrieval": {
+                    "memory": _status_of(mem_outcome),
+                    "knowledge": _status_of(kn_outcome),
+                },
+            },
         )
+
+
+def _retrieve_outcome(manager, query: str, top_k: int):
+    """优先走带状态的接口；老实现（或测试替身）只有 retrieve() 时降级包装。"""
+    from core.retrieval_status import RetrievalOutcome, RetrievalStatus
+
+    fn = getattr(manager, "retrieve_outcome", None)
+    if callable(fn):
+        # MagicMock 会自动生成任意属性，必须校验**返回值类型**才可靠
+        out = fn(query, top_k=top_k)
+        if isinstance(out, RetrievalOutcome):
+            return out
+    hits = manager.retrieve(query, top_k=top_k)
+    return RetrievalOutcome(
+        hits=hits,
+        status=RetrievalStatus.SUCCESS if hits else RetrievalStatus.NO_RELEVANT_RESULTS,
+        reason="" if hits else "below_threshold",
+    )
+
+
+def _status_of(outcome) -> dict:
+    """把 RetrievalOutcome 压成可序列化的精简状态（不含正文）。"""
+    if outcome is None:
+        return {"status": "skipped", "hits": 0}
+    return {
+        "status": getattr(outcome.status, "value", str(outcome.status)),
+        "hits": len(outcome.hits),
+        "candidates": outcome.candidates,
+        "duration_ms": round(outcome.duration_ms, 1),
+        "reason": outcome.reason,
+    }

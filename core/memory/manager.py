@@ -100,6 +100,11 @@ class MemoryManager:
     def session_id(self) -> str:
         return self._session_id
 
+    @property
+    def store(self):
+        """底层存储（供同库仓储复用单连接，如研究会话）。"""
+        return self._store
+
     def new_session(self) -> str:
         """开启新会话（对应 UI 的"新对话"）。
 
@@ -290,6 +295,20 @@ class MemoryManager:
         except Exception as e:  # noqa: BLE001
             log.warning("记忆检索失败：%s", e)
             return []
+
+    def retrieve_outcome(self, query: str, *, top_k: int = 5) -> "RetrievalOutcome":
+        """带状态的检索（不抛异常：失败也返回 FAILED，让上层可观测）。"""
+        from ..retrieval_status import RetrievalOutcome, RetrievalStatus
+
+        if self._retriever is None:
+            return RetrievalOutcome(
+                hits=[], status=RetrievalStatus.FAILED, reason="no_embedder")
+        try:
+            return self._retriever.retrieve_outcome(query, top_k=top_k)
+        except Exception as e:  # noqa: BLE001
+            log.warning("记忆检索失败：%s", e)
+            return RetrievalOutcome(
+                hits=[], status=RetrievalStatus.FAILED, reason=str(e)[:80])
 
     def memory_block(self, query: str, *, top_k: int = 5) -> str:
         """检索并把命中渲染成可注入提示词的段落（已剔除分数）。"""

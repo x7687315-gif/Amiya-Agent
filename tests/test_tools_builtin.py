@@ -11,14 +11,14 @@ from core.tools.builtin import CalculatorTool, TaskDeleteTool, TaskTool, TimeToo
 
 # ---------- schema v4 迁移 ----------
 
-def test_schema_version_is_5():
-    # v4 = 行动系统三表；v5 = 到期提醒水位（notified_at）
-    assert SCHEMA_VERSION == 5
+def test_schema_version_is_6():
+    # v4 = 行动系统三表；v5 = 到期提醒水位（notified_at）；v6 = 研究会话表
+    assert SCHEMA_VERSION == 6
 
 
 def test_fresh_db_has_v4_tables(tmp_path):
     store = SQLiteMemoryStore(str(tmp_path / "fresh.db"))
-    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     for table in ("agent_run", "agent_run_step", "assistant_task"):
         row = store._conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
@@ -60,7 +60,7 @@ def test_v3_migration_preserves_old_data(tmp_path):
     conn.close()
 
     store = SQLiteMemoryStore(db)
-    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert store._conn.execute("SELECT content FROM conversation").fetchone()[0] == "老数据"
     assert store._conn.execute("SELECT content FROM memory").fetchone()[0] == "旧记忆"
     # 新表可写

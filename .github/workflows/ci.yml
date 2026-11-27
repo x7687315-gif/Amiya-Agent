@@ -57,4 +57,8 @@ jobs:
             tests/test_config.py \
             tests/test_embedder.py \
             tests/test_server_tools.py \
-            tests/test_llm_tools.py
+            tests/test_llm_tools.py \
+            tests/test_retrieval_status.py \
+            tests/test_protocol_guard.py \
+            tests/test_research_session.py \
+            tests/test_migration_chain.py

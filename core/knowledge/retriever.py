@@ -14,10 +14,12 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from ..memory.embedder import Embedder, cosine, tokenize
+from ..retrieval_status import RetrievalOutcome, RetrievalStatus
 from .bm25 import BM25Index, rrf_fuse, top_indices
 
 log = logging.getLogger(__name__)
@@ -75,16 +77,40 @@ class KnowledgeRetriever:
             return []
 
     def retrieve(self, query: str, top_k: Optional[int] = None) -> List[KnowledgeHit]:
+        return self.retrieve_outcome(query, top_k=top_k).hits
+
+    def retrieve_outcome(
+        self, query: str, top_k: Optional[int] = None
+    ) -> RetrievalOutcome:
+        """带状态的检索：区分"知识库没有"与"索引/嵌入坏了"。"""
+        start = time.perf_counter()
+
+        def done(hits, status, reason="") -> RetrievalOutcome:
+            return RetrievalOutcome(
+                hits=hits, status=status, reason=reason,
+                candidates=len(self.corpus.chunks),
+                top_score=max((h.score for h in hits), default=None),
+                duration_ms=(time.perf_counter() - start) * 1000,
+            )
+
         top_k = top_k or self.top_k
+        if not self.corpus.chunks:
+            return done([], RetrievalStatus.NO_RELEVANT_RESULTS, "no_data")
         if not self._vectors:
-            return []
+            # 有语料但没有向量：嵌入/索引坏了，不是"没有相关知识"
+            return done([], RetrievalStatus.DEGRADED, "embed_unavailable")
         if self.hybrid_enabled:
-            return self._retrieve_hybrid(query, top_k)
+            hits = self._retrieve_hybrid(query, top_k)
+            return done(
+                hits,
+                RetrievalStatus.SUCCESS if hits else RetrievalStatus.NO_RELEVANT_RESULTS,
+                "" if hits else "below_threshold",
+            )
         try:
             qv = self.embedder.encode([query])[0]
         except Exception as e:  # noqa: BLE001
             log.warning("知识查询向量化失败：%s", e)
-            return []
+            return done([], RetrievalStatus.DEGRADED, "embed_unavailable")
 
         q_tokens = set(tokenize(query))
         scored = []
@@ -111,7 +137,11 @@ class KnowledgeRetriever:
                     channels={"vector": round(v, 3), "keyword": round(k, 3)},
                 )
             )
-        return hits
+        return done(
+            hits,
+            RetrievalStatus.SUCCESS if hits else RetrievalStatus.NO_RELEVANT_RESULTS,
+            "" if hits else "below_threshold",
+        )
 
     def _retrieve_hybrid(self, query: str, top_k: int) -> List[KnowledgeHit]:
         """向量 + BM25 双路召回，RRF 融合。

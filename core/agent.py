@@ -119,6 +119,9 @@ class Agent:
         # 本轮检索结果（UI 用来显示"参考了什么"）：None=尚未跑过。
         # 只放"数量/是否用到"，不放命中内容与分数（信息最小化）。
         self.last_retrieval: "Optional[dict]" = None
+        # 每路检索的状态（success / no_relevant_results / degraded / failed）。
+        # 与 last_retrieval 分开：后者是给用户看的"参考了几条"，前者是给诊断用的。
+        self.last_retrieval_status: "Optional[dict]" = None
         if memory is not None and restore_history:
             self._restore_history()
 
@@ -265,6 +268,7 @@ class Agent:
             "memory": len(hits or []),
             "knowledge": bool(ctx.metadata.get("knowledge_used")),
         }
+        self.last_retrieval_status = ctx.metadata.get("retrieval")
 
         # on_retrieval 回调：把命中项交给 2.6 的 UI（thinking overlay / 记忆面板）
         # 时机不变——组装后、LLM 请求前；异常吞噬语义不变。

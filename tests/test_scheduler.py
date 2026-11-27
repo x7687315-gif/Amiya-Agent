@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.memory.store import SCHEMA_VERSION
+
 from core.memory.store import SQLiteMemoryStore
 from core.scheduler import TaskScheduler
 from core.tasks import TaskRepository
@@ -16,16 +18,16 @@ from ui.app import AmiyaApp
 
 # ---------------------------------------------------------------- v5 迁移
 
-def test_fresh_db_is_v5_with_notified_at(tmp_path):
+def test_fresh_db_is_v6_with_notified_at(tmp_path):
     store = SQLiteMemoryStore(str(tmp_path / "a.db"))
-    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     cols = [r["name"] for r in store._conn.execute(
         "PRAGMA table_info(assistant_task)").fetchall()]
     assert "notified_at" in cols
     store.close()
 
 
-def test_v4_upgrades_to_v5_without_data_loss(tmp_path):
+def test_v4_upgrades_to_latest_without_data_loss(tmp_path):
     """手工造一个 v4 库（只有 v4 三表），打开后应补列且旧任务仍在。"""
     path = str(tmp_path / "v4.db")
     conn = sqlite3.connect(path)
@@ -43,7 +45,7 @@ def test_v4_upgrades_to_v5_without_data_loss(tmp_path):
     conn.close()
 
     store = SQLiteMemoryStore(path)
-    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     repo = TaskRepository(store)
     task = repo.get("t1")
     assert task is not None and task.title == "旧任务"

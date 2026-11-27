@@ -63,6 +63,10 @@ class Settings:
     ui_right_width: int  # 右栏宽度（可拖拽调节，持久化；默认 300）
     ui_layout: str  # 启动布局模式（P1 提交 5 起）：new=新外壳（默认，侧栏可隐藏）；legacy=旧三栏（回退）
     runtime_enabled: bool  # 2.x Hybrid 灰度总开关：False=普通聊天走快路径（默认，零行为变化）；True=模型提出工具调用时移交 Agent Runtime
+    research_session_enabled: bool  # 研究会话：保存并回传服务端工具协议状态（默认开）
+    research_session_ttl_hours: float  # 会话有效期（小时）
+    research_session_max_chars: int  # 单会话累计字符上限，超限则重启
+    research_session_auto_restart: bool  # 状态不可用时自动重搜（False → 明确 blocked）
     web_tools_enabled: bool  # 2.x Phase 4 联网总开关：False=不声明任何服务端工具（默认，零行为变化）
     web_search_enabled: bool  # 联网搜索（deepseek_web_search）；仅在总开关开启时生效
     url_reading_enabled: bool  # 读链接（deepseek_read_url）；仅在总开关开启时生效
@@ -118,6 +122,10 @@ def load_settings() -> Settings:
         ui_layout=(os.getenv("UI_LAYOUT") or "new").strip(),
         ui_right_width=int(os.getenv("UI_RIGHT_WIDTH") or "300"),
         runtime_enabled=_env_bool("RUNTIME_ENABLED", False),
+        research_session_enabled=_env_bool("RESEARCH_SESSION_ENABLED", True),
+        research_session_ttl_hours=float(os.getenv("RESEARCH_SESSION_TTL_HOURS", "24")),
+        research_session_max_chars=int(os.getenv("RESEARCH_SESSION_MAX_CHARS", "60000")),
+        research_session_auto_restart=_env_bool("RESEARCH_SESSION_AUTO_RESTART", True),
         web_tools_enabled=_env_bool("WEB_TOOLS_ENABLED", False),
         web_search_enabled=_env_bool("WEB_SEARCH_ENABLED", True),
         url_reading_enabled=_env_bool("URL_READING_ENABLED", True),

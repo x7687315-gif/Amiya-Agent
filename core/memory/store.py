@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 MEMORY_TYPES = ("fact", "preference", "event", "goal", "relationship")
 CANDIDATE_STATUSES = ("pending", "confirmed", "rejected")
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # persona_state 允许被 save_state 改写的字段（防止任意键写入）
 _STATE_FIELDS = {
@@ -202,6 +202,27 @@ ALTER TABLE assistant_task ADD COLUMN notified_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_task_due ON assistant_task(status, due_at);
 """
 
+# v6：联网研究会话的协议状态（Phase 9）。
+# protocol_json 原样存服务端返回的 assistant 消息——协议字段可能变，
+# 解析后再存会随版本漂移；原样存最保守。**不存网页正文**（本来就在加密的
+# signature 里，我们也解不开）。
+_SCHEMA_V6 = """
+CREATE TABLE IF NOT EXISTS research_session (
+  session_id      TEXT PRIMARY KEY,
+  conversation_id TEXT,
+  status          TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  turn_count      INTEGER NOT NULL DEFAULT 0,
+  total_chars     INTEGER NOT NULL DEFAULT 0,
+  protocol_json   TEXT,
+  sources_json    TEXT,
+  expires_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_research_session_status
+  ON research_session(status, updated_at);
+"""
+
 # 版本链：按序执行所有「库版本 < 目标版本」的脚本。
 # 已装机的 v1 库再次打开时只会跑 v2/v3，不会重放 v1。
 # 注意 v3 用的是 ALTER（非幂等），因此绝不能把这两列补进 _SCHEMA_V1——
@@ -212,6 +233,7 @@ _MIGRATIONS: Tuple[Tuple[int, str], ...] = (
     (3, _SCHEMA_V3),
     (4, _SCHEMA_V4),
     (5, _SCHEMA_V5),
+    (6, _SCHEMA_V6),
 )
 
 # PRAGMA 不支持参数绑定；为满足「SQL 必须为字面量」的安全约束，
@@ -223,6 +245,7 @@ _VERSION_PRAGMAS: dict = {
     3: "PRAGMA user_version=3",
     4: "PRAGMA user_version=4",
     5: "PRAGMA user_version=5",
+    6: "PRAGMA user_version=6",
 }
 
 
@@ -366,7 +389,11 @@ class SQLiteMemoryStore:
             version = cur[0] if cur else 0
             # 迁移前备份（用户保护性策略）：仅当确实需要升级且是文件库时。
             # 失败不阻断迁移（备份是保险，不是前提）；日志留痕。
-            if version < SCHEMA_VERSION and self._db_path != ":memory:":
+            # 只备份"已有内容的旧库"：全新文件库的 version=0 也会进这个分支，
+            # 但备份一个空库只会留下垃圾文件（2026-11-28 由迁移测试发现）。
+            has_tables = self._conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0] > 0
+            if version < SCHEMA_VERSION and self._db_path != ":memory:" and has_tables:
                 self._backup_before_migration()
             for target, script in _MIGRATIONS:
                 if version < target:
