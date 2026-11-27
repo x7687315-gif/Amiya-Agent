@@ -129,6 +129,8 @@ class MemoryRetriever:
         half_life_days: float = 45.0,
         candidate_limit: int = 500,
         min_score: float = 0.05,
+        min_vector: float = 0.50,
+        min_keyword: float = 0.20,
     ) -> None:
         self._store = store
         self._embedder = embedder
@@ -136,6 +138,13 @@ class MemoryRetriever:
         self._half_life = half_life_days
         self._candidate_limit = candidate_limit
         self._min_score = min_score
+        # 相关性证据闸门（2026-11-27 校准）：recency/importance/confidence 是
+        # **先验**通道，它们会给每条记忆垫一个底分（实测无关查询也能到 0.28~0.41），
+        # 于是 top_k 永远被填满，注入一堆不相关的"参考"。
+        # 规则：向量或关键词至少有一条达到下限，才有资格进入候选；
+        # 先验通道只在**已相关**的候选之间做微调，不能把不相关的东西抬进来。
+        self._min_vector = min_vector
+        self._min_keyword = min_keyword
 
     @property
     def embedder(self) -> Embedder:
@@ -235,6 +244,9 @@ class MemoryRetriever:
                 "importance": _scale(row.get("importance"), 1, 10),
                 "confidence": _scale(row.get("confidence"), 1, 5),
             }
+            # 证据闸门：没有任何一条相关性证据 → 不进入候选（先验分再高也不行）
+            if channels["vector"] < self._min_vector and channels["keyword"] < self._min_keyword:
+                continue
             score = sum(norm[k] * v for k, v in channels.items())
             if score < threshold:
                 continue

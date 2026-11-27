@@ -21,15 +21,18 @@ Step 2.4 追加（schema v3）：
 from __future__ import annotations
 
 import array
+import logging
 import os
 import sqlite3
 import threading
 from datetime import date, datetime
 from typing import Dict, List, Optional, Protocol, Sequence, Tuple, runtime_checkable
 
+logger = logging.getLogger(__name__)
+
 MEMORY_TYPES = ("fact", "preference", "event", "goal", "relationship")
 CANDIDATE_STATUSES = ("pending", "confirmed", "rejected")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 # persona_state 允许被 save_state 改写的字段（防止任意键写入）
 _STATE_FIELDS = {
@@ -141,6 +144,64 @@ ALTER TABLE memory ADD COLUMN embedding_dim INTEGER;
 CREATE INDEX IF NOT EXISTS idx_mem_embmodel ON memory(embedding_model);
 """
 
+# v4（2.x Phase 2B）：任务执行与持久化三表。
+# 设计稿见 docs/2x/DATA_MODEL_2.0.md；全部 CREATE TABLE IF NOT EXISTS（幂等）。
+# 红线：三表与 conversation/memory 逻辑隔离，不建 FK/触发器；
+#       工具中间结果只进 agent_run_step，绝不写 memory 正表。
+_SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS agent_run (
+  run_id           TEXT PRIMARY KEY,
+  session_id       TEXT NOT NULL,
+  status           TEXT NOT NULL,
+  trigger          TEXT NOT NULL DEFAULT 'chat',
+  handoff_from     TEXT,
+  created_at       TEXT NOT NULL,
+  started_at       TEXT,
+  completed_at     TEXT,
+  final_response   TEXT,
+  error            TEXT,
+  budget_steps     INTEGER NOT NULL DEFAULT 5,
+  total_tokens     INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS agent_run_step (
+  step_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id           TEXT NOT NULL,
+  sequence         INTEGER NOT NULL,
+  step_type        TEXT NOT NULL,
+  tool_name        TEXT,
+  tool_call_id     TEXT,
+  arguments_json   TEXT,
+  result_summary   TEXT,
+  status           TEXT NOT NULL,
+  error_code       TEXT,
+  approval_outcome TEXT,
+  started_at       TEXT,
+  completed_at     TEXT,
+  UNIQUE(run_id, sequence)
+);
+CREATE TABLE IF NOT EXISTS assistant_task (
+  task_id      TEXT PRIMARY KEY,
+  title        TEXT NOT NULL,
+  description  TEXT,
+  due_at       TEXT,
+  priority     INTEGER DEFAULT 5,
+  status       TEXT NOT NULL DEFAULT 'open',
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_step_run ON agent_run_step(run_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_task_status ON assistant_task(status);
+"""
+
+# v5（2.x Phase 7）：任务到期提醒的「已触发」水位。
+# 为什么要落库而不是内存集合：进程重启后内存集合会清空，所有过期任务会被
+# 重复提醒（打扰用户）。列 + 索引让提醒在重启后仍保持 at-most-once。
+# 与 v3 同理用 ALTER：不能把该列写进 _SCHEMA_V4 的 CREATE（会与 ALTER 撞车）。
+_SCHEMA_V5 = """
+ALTER TABLE assistant_task ADD COLUMN notified_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_task_due ON assistant_task(status, due_at);
+"""
+
 # 版本链：按序执行所有「库版本 < 目标版本」的脚本。
 # 已装机的 v1 库再次打开时只会跑 v2/v3，不会重放 v1。
 # 注意 v3 用的是 ALTER（非幂等），因此绝不能把这两列补进 _SCHEMA_V1——
@@ -149,7 +210,20 @@ _MIGRATIONS: Tuple[Tuple[int, str], ...] = (
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
     (3, _SCHEMA_V3),
+    (4, _SCHEMA_V4),
+    (5, _SCHEMA_V5),
 )
+
+# PRAGMA 不支持参数绑定；为满足「SQL 必须为字面量」的安全约束，
+# 每个版本写一条字面量语句。用表驱动而非 if/elif 链：新增迁移只需加一行，
+# 漏配会在迁移时 KeyError 立即暴露，不会静默跳版本。
+_VERSION_PRAGMAS: dict = {
+    1: "PRAGMA user_version=1",
+    2: "PRAGMA user_version=2",
+    3: "PRAGMA user_version=3",
+    4: "PRAGMA user_version=4",
+    5: "PRAGMA user_version=5",
+}
 
 
 @runtime_checkable
@@ -262,6 +336,25 @@ class SQLiteMemoryStore:
         self._migrate()
 
     # ----- 迁移 -----
+    def _backup_before_migration(self) -> None:
+        """把 db 复制为 assistant.db.bak.<timestamp>（仅迁移前一次）。
+
+        用 sqlite3 官方 backup() API 而非 shutil.copy：WAL 模式下
+        直接拷文件可能漏掉未 checkpoint 的帧，backup() 保证快照一致。
+        备份失败只警告不阻断（避免备份权限问题拖垮启动）。
+        """
+        import datetime
+        import sqlite3 as _sqlite3
+
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = f"{self._db_path}.bak.{stamp}"
+        try:
+            with _sqlite3.connect(backup_path) as dst:
+                self._conn.backup(dst)
+            logger.info("迁移前备份完成：%s", backup_path)
+        except Exception as exc:  # noqa: BLE001 - 备份失败不阻断启动
+            logger.warning("迁移前备份失败（不阻断）：%s：%s", backup_path, exc)
+
     def _migrate(self) -> None:
         """按版本链增量升级，每步单独提交并推进 user_version。
 
@@ -271,10 +364,17 @@ class SQLiteMemoryStore:
         with self._lock:
             cur = self._conn.execute("PRAGMA user_version").fetchone()
             version = cur[0] if cur else 0
+            # 迁移前备份（用户保护性策略）：仅当确实需要升级且是文件库时。
+            # 失败不阻断迁移（备份是保险，不是前提）；日志留痕。
+            if version < SCHEMA_VERSION and self._db_path != ":memory:":
+                self._backup_before_migration()
             for target, script in _MIGRATIONS:
                 if version < target:
                     self._conn.executescript(script)
-                    self._conn.execute(f"PRAGMA user_version={target}")
+                    pragma = _VERSION_PRAGMAS.get(target)
+                    if pragma is None:  # pragma: no cover
+                        raise KeyError(f"缺少 user_version 语句: {target}")
+                    self._conn.execute(pragma)
                     self._conn.commit()
                     version = target
 

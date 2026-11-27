@@ -246,6 +246,28 @@ def local_backend_available() -> bool:
     return importlib.util.find_spec("sentence_transformers") is not None
 
 
+def probe(embedder: "Embedder", *, text: str = "检索自检") -> "Optional[str]":
+    """探针：真正跑一次 encode，返回错误描述；健康返回 None。
+
+    为什么需要它（2026-11-27 事故）：`sentence-transformers` 因依赖版本不兼容
+    无法导入，`_embed_all()` 捕获异常后返回空列表——知识检索**恒为空**，
+    记忆向量通道同样降级，界面上只是"没有参考"，没有任何报错。
+    只做"包能否导入"的探测不够（`local_backend_available()` 就属于这种），
+    必须真正前向一次才能发现运行时错误（模型加载、DLL、hub 版本）。
+    """
+    try:
+        vec = embedder.encode([text])
+    except Exception as e:  # noqa: BLE001 - 任何异常都要变成可读提示
+        return f"{type(e).__name__}: {e}"[:200]
+    try:
+        first = vec[0] if vec else None
+    except Exception:  # noqa: BLE001
+        return "嵌入返回结构异常"
+    if not first:
+        return "嵌入返回空向量"
+    return None
+
+
 def get_embedder(
     backend: str = "auto",
     model_name: str = DEFAULT_MODEL,

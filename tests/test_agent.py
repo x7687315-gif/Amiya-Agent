@@ -142,7 +142,7 @@ def test_deepseek_client_constructable():
     # 仅验证构造不依赖网络（实际请求在 stream_chat 中发生）
     c = DeepSeekLLMClient(api_key="sk-x", base_url="https://api.deepseek.com/v1")
     assert c.url == "https://api.deepseek.com/v1/chat/completions"
-    assert c.model == "deepseek-chat"
+    assert c.model == "deepseek-flash"  # 2.x 模型迁移
 
 
 # ----- Step 2.4：记忆检索 + Prompt 注入闭环 -----
@@ -161,7 +161,10 @@ class CaptureLLM:
 
 
 def test_agent_injects_memory_into_prompt(store):
-    mgr = MemoryManager(store, embedder=HashingEmbedder(dim=128))
+    # 本用例测的是「命中如何注入提示词」的通路；相关性闸门的行为由
+    # test_retrieval.py 覆盖，这里关掉闸门以免 HashingEmbedder 的低相似度干扰。
+    mgr = MemoryManager(store, embedder=HashingEmbedder(dim=128),
+                        min_vector=0.0, min_keyword=0.0)
     mgr.remember("fact", "用户养了一只橘猫", importance=8, confidence=5)
     mgr.reindex()
 
@@ -215,8 +218,8 @@ def test_knowledge_does_not_pollute_memory(store, tmp_path):
     """Knowledge 三柱隔离：知识命中注入【角色知识】，绝不写入/注入【相关用户记忆】。"""
     kdir = tmp_path / "kb"
     kdir.mkdir()
-    (kdir / "assistant.md").write_text(
-        "# 技艺\n助手能操控技艺进行攻击。", encoding="utf-8"
+    (kdir / "amiya.md").write_text(
+        "# 源石技艺\n助手能操控源石技艺进行攻击。", encoding="utf-8"
     )
     embedder = HashingEmbedder(dim=128)
     kmgr = KnowledgeManager(kdir, embedder, top_k=3)
@@ -231,11 +234,11 @@ def test_knowledge_does_not_pollute_memory(store, tmp_path):
         knowledge=kmgr,
         on_retrieval=lambda hs: captured.extend(hs),
     )
-    "".join(agent.reply("助手的技艺怎么样"))
+    "".join(agent.reply("助手的源石技艺怎么样"))
 
     # 知识命中正确注入独立的【角色知识】块
     assert "【角色知识】" in llm.last_system
-    assert "技艺" in llm.last_system
+    assert "源石技艺" in llm.last_system
     # 记忆块不应出现（知识检索不做记忆副作用）
     assert "【相关用户记忆】" not in llm.last_system
     # 最关键：知识检索绝不能写入记忆表
@@ -247,7 +250,8 @@ def test_knowledge_does_not_pollute_memory(store, tmp_path):
 def test_memory_does_not_pollute_knowledge(store, tmp_path):
     """Memory 三柱隔离：记忆命中注入【相关用户记忆】，绝不泄漏进【角色知识】。"""
     embedder = HashingEmbedder(dim=128)
-    mgr = MemoryManager(store, embedder=embedder)
+    # 同上：测三柱隔离，不测闸门；关掉闸门保证命中能进入提示词
+    mgr = MemoryManager(store, embedder=embedder, min_vector=0.0, min_keyword=0.0)
     mgr.remember("fact", "用户养了一只橘猫", importance=8, confidence=5)
     mgr.reindex()
 

@@ -11,9 +11,12 @@ def test_missing_key_raises(monkeypatch):
 
 def test_loads_with_key(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-123")
+    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_THINKING", raising=False)
     s = load_settings()
     assert s.api_key == "sk-test-123"
-    assert s.model == "deepseek-chat"
+    assert s.model == "deepseek-flash"  # 2.x 模型迁移（裁决 C，可回滚）
+    assert s.deepseek_thinking == "off"
     assert s.history_limit == 20
 
 
@@ -54,3 +57,35 @@ def test_persist_ui_layout_syncs_environ(monkeypatch, tmp_path):
     s = load_settings()
     assert s.ui_left_width == 320
     assert s.ui_right_width == 380
+
+
+# ----- Phase 8：.env 原子写 -----
+
+def test_atomic_write_replaces_content_and_leaves_no_temp(tmp_path):
+    from config import _atomic_write_text
+
+    path = tmp_path / ".env"
+    path.write_text("OLD=1\n", encoding="utf-8")
+
+    _atomic_write_text(path, "NEW=2\n")
+
+    assert path.read_text(encoding="utf-8") == "NEW=2\n"
+    assert not (tmp_path / ".env.tmp").exists()  # 临时文件不残留
+
+
+def test_atomic_write_preserves_content_on_replace_failure(monkeypatch, tmp_path):
+    """写盘失败（模拟 replace 抛错）时旧文件必须完好——这正是原子写的意义。"""
+    import config
+
+    path = tmp_path / ".env"
+    path.write_text("SECRET=keep-me\n", encoding="utf-8")
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(config.os, "replace", boom, raising=False)
+    with pytest.raises(OSError):
+        config._atomic_write_text(path, "SECRET=lost\n")
+
+    assert path.read_text(encoding="utf-8") == "SECRET=keep-me\n"
+    assert not (tmp_path / ".env.tmp").exists()

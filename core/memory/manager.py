@@ -68,6 +68,8 @@ class MemoryManager:
         *,
         session_id: Optional[str] = None,
         embedder: Optional[Embedder] = None,
+        min_vector: float = 0.50,
+        min_keyword: float = 0.20,
     ) -> None:
         self._store = store
         self._session_id = session_id or new_session_id()
@@ -75,8 +77,23 @@ class MemoryManager:
         # 这样「没装 sentence-transformers 的环境」也能完整使用记忆系统。
         self._embedder = embedder
         self._retriever = (
-            MemoryRetriever(store, embedder) if embedder is not None else None
+            MemoryRetriever(store, embedder,
+                            min_vector=min_vector, min_keyword=min_keyword)
+            if embedder is not None
+            else None
         )
+
+    # ----- 健康检查 -----
+    def health_check(self) -> Optional[str]:
+        """检索可用性自检：嵌入是否真的能做一次前向。健康返回 None。
+
+        刻意不做"包能否导入"的廉价判断（那正是上次没发现问题的原因）。
+        """
+        if self._embedder is None:
+            return None
+        from .embedder import probe
+
+        return probe(self._embedder)
 
     # ----- 会话 -----
     @property
