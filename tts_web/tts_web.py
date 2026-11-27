@@ -35,6 +35,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -64,8 +65,11 @@ concat_chunks_wav = audio_utils.concat_chunks_wav
 TTS_HOST = "127.0.0.1"
 TTS_PORT = 9880
 
-# 参考音频必须是绝对路径（TTS 进程按此路径从磁盘读取，不能用相对路径）
-REF_AUDIO_PATH = "<ASSISTANT_AGENT_DIR>/core/tts/voice_profiles/assistant/reference.wav"
+# 参考音频必须是绝对路径（TTS 进程按此路径从磁盘读取，不能用相对路径）。
+# 默认从仓库根推导（不硬编码机器绝对路径），可用 TTS_REF_AUDIO 覆盖
+REF_AUDIO_PATH = os.environ.get("TTS_REF_AUDIO") or os.path.join(
+    _PROJ_ROOT, "core", "tts", "voice_profiles", "assistant", "reference.wav"
+)
 PROMPT_TEXT = "用户，你在忙吗？"          # 参考音频的准确文字（M1 已人工核对）
 PROMPT_LANG = "zh"
 DEFAULT_TEXT_LANG = "zh"
@@ -74,8 +78,13 @@ DEFAULT_TEXT_LANG = "zh"
 MAX_CHARS = audio_utils.MAX_CHARS
 PER_CHUNK_SPLIT = "cut0"                  # 单块即单段，禁止 API 内部再切分（防 cut5 仍漏字）
 
-# ffmpeg：仅 MP4 输出需要
-FFMPEG = "<GPT_SOVITS_DIR>/runtime/ffmpeg.exe"
+# ffmpeg：仅 MP4 输出需要。解析顺序：TTS_FFMPEG 环境变量 → PATH →
+# GPT-SoVITS runtime 占位路径（部署时按本机实际位置改，或设 TTS_FFMPEG）
+FFMPEG = (
+    os.environ.get("TTS_FFMPEG")
+    or shutil.which("ffmpeg")
+    or "<GPT_SOVITS_DIR>/runtime/ffmpeg.exe"
+)
 
 WEB_PORTS = [8000, 8080, 8888]            # 依次尝试，首个可用者
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -104,8 +113,9 @@ def _emit(wfile, obj) -> None:
     try:
         wfile.write(line.encode("utf-8"))
         wfile.flush()
-    except Exception:
-        pass
+    except Exception as e:
+        # 客户端断开属常态，但完全无声会掩盖推送链路问题——记到 stderr
+        print(f"[tts-web] SSE 推送失败（客户端可能已断开）: {e}", file=sys.stderr)
 
 
 def _fetch_chunk_wav(text_chunk: str, lang: str, max_retry: int = 3) -> bytes:

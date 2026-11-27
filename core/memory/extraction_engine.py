@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Dict, List
 
 from .extractor import ExtractedMemory, MemoryExtractor
@@ -29,10 +30,12 @@ from .store import MEMORY_TYPES
 if TYPE_CHECKING:  # 仅类型标注，运行期不导入 llm_client（保持依赖收敛在 core.memory）
     from ..llm_client import LLMClient
 
+log = logging.getLogger(__name__)
+
 # 抽取提示词：独立于助手人格。明确"你不是助手本人"，杜绝人格泄漏。
 EXTRACTION_SYSTEM_PROMPT = (
     "你是「助手的记忆整理助手」。你的唯一任务是：从最近一段对话里，"
-    "抽取出【值得长期记住的、稳定的】信息。你不是助手本人，不要代入其"
+    "抽取出【值得长期记住的、稳定的】信息。你不是助手本人，不要代入她的"
     "语气，也不要和用户对话——只输出结构化结果。\n\n"
     "抽取原则：\n"
     "1. 稳定且可复用的事实才抽：长期偏好、反复出现的习惯、重要目标、"
@@ -60,6 +63,14 @@ EXTRACTION_SYSTEM_PROMPT = (
     '   "reason": "为什么值得记（给人看）"}\n'
     "]\n"
     "无候选时输出 []。"
+)
+
+# JSON Output 模式专用后缀：response_format=json_object 要求输出对象而非裸数组，
+# 包一层 {"candidates": [...]}；parse_json_array 按首个 '[' 到末个 ']' 提取内层数组，
+# 两种形态兼容。旧路径（json_mode=False）不使用本后缀，行为逐字不变。
+EXTRACTION_JSON_SUFFIX = (
+    "\n\n输出要求（JSON 模式）：只输出一个 JSON 对象，形如 "
+    '{"candidates": [ 上述候选数组 ]}；无候选时输出 {"candidates": []}。'
 )
 
 
@@ -148,9 +159,13 @@ class ExtractionEngine:
     污染召回。引擎只 propose_many，把转正权交还给人。
     """
 
-    def __init__(self, extractor: MemoryExtractor, llm: "LLMClient") -> None:
+    def __init__(self, extractor: MemoryExtractor, llm: "LLMClient",
+                 *, json_mode: bool = False) -> None:
         self._extractor = extractor  # 写-only seam（Step A 已落地）
         self._llm = llm
+        # 批2 可选增强：JSON Output（response_format）强制结构化输出。
+        # 默认关=旧 chat() 路径逐字不变；开启需 llm 具备 chat_with_tools。
+        self._json_mode = json_mode
 
     def extract(
         self,
@@ -166,13 +181,26 @@ class ExtractionEngine:
         if not window:
             return []
         try:
-            raw = self._llm.chat(
-                EXTRACTION_SYSTEM_PROMPT,
-                window,
-                temperature=0.0,
-                max_tokens=1024,
-            )
-        except Exception:  # noqa: BLE001 - 抽取失败绝不崩对话
+            if self._json_mode and hasattr(self._llm, "chat_with_tools"):
+                resp = self._llm.chat_with_tools(
+                    EXTRACTION_SYSTEM_PROMPT + EXTRACTION_JSON_SUFFIX,
+                    window,
+                    temperature=0.0,
+                    max_tokens=1024,
+                    response_format={"type": "json_object"},
+                )
+                raw = resp.content or ""
+            else:
+                raw = self._llm.chat(
+                    EXTRACTION_SYSTEM_PROMPT,
+                    window,
+                    temperature=0.0,
+                    max_tokens=1024,
+                )
+        except Exception as e:  # noqa: BLE001 - 抽取失败绝不崩对话
+            # 静默降级但必须留痕：EXTRACT_AUTO 开启后若 API key 失效，
+            # 这里是唯一能发现"抽取链路已死"的地方
+            log.warning("记忆抽取 LLM 调用失败（本轮返回空候选）：%s", e)
             return []
         items = parse_json_array(raw, max_candidates=max_candidates)
         if not items:

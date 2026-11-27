@@ -94,6 +94,12 @@ class _FakeResp:
         self.content = content
         self.status_code = status_code
 
+    def __enter__(self):
+        return self  # _single_synth 现以 with 消费响应（2026-09-06 资源关闭修复）
+
+    def __exit__(self, *a):
+        return False
+
 
 @pytest.fixture
 def fake_svc(tmp_path, monkeypatch):

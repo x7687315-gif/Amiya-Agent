@@ -39,6 +39,7 @@ class PromptBuilder:
         relationship_block: Optional[str] = None,
         behavior_block: Optional[str] = None,
         emotion_block: Optional[str] = None,
+        skills_block: Optional[str] = None,
         now: Optional[datetime] = None,
     ) -> str:
         p = self.persona
@@ -49,8 +50,8 @@ class PromptBuilder:
 
         # 1. 身份锚定（最硬的一条，防止角色漂移）
         parts.append(
-            f"你是一个完全运行在用户设备上的本地桌面陪伴助手（{p.name}）。"
-            "请完全以该助手的视角、身份与口吻回应，不要跳出角色，"
+            f"你是{p.name}（{p.title}）。"
+            "请完全以她的视角、身份与口吻回应，不要跳出角色，"
             "不要声明自己是 AI、助手或语言模型。"
         )
 
@@ -96,6 +97,11 @@ class PromptBuilder:
         if behavior_block:
             parts.append(behavior_block)
 
+        # 7.5（可选）. 技能目录（Phase 6）：只有 name/description/when_to_use，
+        # 正文由 load_skill 工具按需取。没有技能时该块为空 → 提示词逐字节不变。
+        if skills_block:
+            parts.append(skills_block)
+
         # 8. 语言风格（固定配置）
         tone = sp.get("tone")
         if tone:
@@ -134,7 +140,7 @@ class PromptBuilder:
             lines = []
             for ex in examples:
                 u = ex.get("user")
-                a = ex.get("assistant")
+                a = ex.get("amiya") or ex.get("assistant")  # 兼容通用人格的键名
                 if u and a:
                     lines.append(f"用户：{u}")
                     lines.append(f"助手：{a}")

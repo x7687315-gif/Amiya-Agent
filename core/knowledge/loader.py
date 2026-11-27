@@ -8,11 +8,14 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -20,29 +23,45 @@ class KnowledgeChunk:
     """一条知识片段。id 稳定可复现（源文件::序号），便于缓存与去重。"""
 
     id: str
-    source: str  # 文件名，如 assistant_persona.md
+    source: str  # 文件名，如 amiya_persona.md
     heading: str  # 该片段所属标题（无标题时用文件名）
     text: str  # 标题 + 正文（含标题，便于检索时带上下文）
 
 
 class KnowledgeCorpus:
-    """加载并切分 knowledge 目录下的全部 Markdown。"""
+    """加载并切分 knowledge 目录（以及可选附加目录）下的全部 Markdown。
 
-    def __init__(self, directory: "str | Path") -> None:
+    extra_dirs：把项目文档（如 `docs/2x`）也纳入同一语料，用于让助手"读得懂
+    这个项目"。**不复制文件**——直接读原目录，文档更新即生效，避免两份内容漂移。
+    source 会带上目录名前缀（如 `2x/ARCHITECTURE_2.0.md`）以便区分出处。
+    """
+
+    def __init__(self, directory: "str | Path", *, extra_dirs: "tuple | list" = ()) -> None:
         self.directory = Path(directory)
+        self.extra_dirs = [Path(d) for d in extra_dirs if str(d).strip()]
         self.chunks: list[KnowledgeChunk] = self._load()
 
     def _load(self) -> list[KnowledgeChunk]:
-        chunks: list[KnowledgeChunk] = []
-        if not self.directory.is_dir():
-            return chunks
-        for path in sorted(self.directory.glob("*.md")):
+        chunks = self._load_dir(self.directory, prefix="")
+        for extra in self.extra_dirs:
+            chunks.extend(self._load_dir(extra, prefix=f"{extra.name}/"))
+        return chunks
+
+    def _load_dir(self, directory: Path, *, prefix: str) -> list[KnowledgeChunk]:
+        out: list[KnowledgeChunk] = []
+        if not directory.is_dir():
+            if prefix:  # 附加目录缺失只提示（主目录缺失是正常空库）
+                log.info("知识附加目录不存在（已跳过）：%s", directory)
+            return out
+        for path in sorted(directory.glob("*.md")):
             try:
                 text = path.read_text(encoding="utf-8")
-            except OSError:
+            except OSError as e:
+                # 留痕：文件名拼错/权限问题会让知识库"安静地变空"，必须可排查
+                log.warning("知识文件读取失败（已跳过）：%s：%s", path, e)
                 continue
-            chunks.extend(self._split(text, path.name))
-        return chunks
+            out.extend(self._split(text, f"{prefix}{path.name}"))
+        return out
 
     @staticmethod
     def _split(text: str, source: str) -> list[KnowledgeChunk]:

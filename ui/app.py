@@ -48,10 +48,9 @@ from ui.components.speaker import MuteState  # noqa: E402
 from ui.components.split_handle import SplitHandle  # noqa: E402
 from ui.components.tts_status import TTSStatusBanner, TTSStatusState  # noqa: E402
 from ui.design.avatar_provider import AvatarProvider  # noqa: E402
-from ui.design.skin import SKIN_CANVAS_RATIO, SkinContext, bootstrap_skin  # noqa: E402
+from ui.design.skin import SkinContext, bootstrap_skin  # noqa: E402
 from ui.theme import (  # noqa: E402
     ALIGN_CENTER,
-    ALIGN_CENTER_LEFT,
     ALIGN_TOP_CENTER,
     c,
     layout,
@@ -63,7 +62,6 @@ from ui.layout_metrics import (  # noqa: E402
     clamp_left_width,
     clamp_pair,
     clamp_right_width,
-    window_height_of,
     window_width_of,
 )
 
@@ -78,6 +76,7 @@ class AssistantApp:
         self.avatar_provider: "AvatarProvider | None" = None
         self._persona = None  # run() 后有值；运行时换肤重建用
         self._rebuilding = False  # 运行时换肤重建中（防重入）
+        self._generating = False  # 回复生成中（单一 busy 真源：导航/换肤据此让位）
         # 可调分栏（用户需求：聊天框尺寸/位置手动调节）
         self._left_width = 260
         self._right_width = 300
@@ -88,8 +87,7 @@ class AssistantApp:
         self.input_bar: InputBar | None = None
         self.date_nav: DateNav | None = None
         self.memory_panel: MemoryPanel | None = None
-        self.middle: ft.Column | None = None
-        self._bg_image: "ft.Image | None" = None  # P4：等高左锚的壁纸控件
+        # self.middle：内容列为 Column（无壁纸皮肤）或 Stack（壁纸层 + 内容列）
         self.drawer: PersonaDrawer | None = None
         self._session_start: float = 0.0
         # 语音链路默认值：保证 run() 之前访问这些属性也不崩（测试可注入替换）。
@@ -147,7 +145,8 @@ class AssistantApp:
         if memory is not None:
             try:
                 agent_state = memory.state()
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
+                logger.warning("读取 persona_state 失败（皮肤情绪联动降级）：%s", e)
                 agent_state = None
         self._skin_ctx = bootstrap_skin(settings, agent_state=agent_state)
         self.avatar_provider = self._skin_ctx.avatar_provider
@@ -250,7 +249,9 @@ class AssistantApp:
             return
         try:
             ok = self.tts.health_check()
-        except Exception:  # noqa: BLE001 - 探活异常同样视为不可用
+        except Exception as e:  # noqa: BLE001 - 探活异常同样视为不可用
+            # 区分"服务未启动"（正常降级）与"代码 bug"（需要排查）：必须留痕
+            logger.warning("TTS 探活异常（视为不可用）：%s", e)
             ok = False
         if not ok:
             self._notify_tts_unavailable(
@@ -270,7 +271,12 @@ class AssistantApp:
         """开启新对话：轮换 session、清空短期窗口与当前视图。
 
         只清屏不删库——当天已聊的内容仍归档在「今天」，可从日期导航回看。
+        生成中直接忽略：清屏会摘掉正在流式输出的控件，导致半截回复丢失
+        （2026-09-06 审查 CRITICAL-2 防线 1）。
         """
+        if self._generating:
+            logger.info("回复生成中，已忽略「新对话」请求")
+            return
         if self.agent is not None:
             try:
                 self.agent.reset()
@@ -331,6 +337,11 @@ class AssistantApp:
             self.date_nav.set_current(day)
 
     def _on_day_change(self, day: str) -> None:
+        """切换浏览日期。生成中忽略：show_day 会摘掉流式输出控件
+        （2026-09-06 审查 CRITICAL-2 防线 1）。"""
+        if self._generating:
+            logger.info("回复生成中，已忽略日期切换：%s", day)
+            return
         self._load_day(day)
 
     def _setup_page(self, persona) -> None:
@@ -353,28 +364,17 @@ class AssistantApp:
         # 之外的第 3 个同步时机。
         self.page.on_resize = self._on_window_resize
 
-    def _apply_bg_size(self) -> None:
-        """P4：壁纸「等高 + 左锚」尺寸——高=窗口高，宽=画布比例×高。
-
-        Image 的 fit 无法改变裁切锚点（无 alignment），所以由 app 侧显式给出
-        与画布同比例的盒子，让 COVER 不产生裁切；窗口 resize 后重算即可保持
-        左缘贴合。
-        """
-        img = self._bg_image
-        if img is None or self.page is None:
-            return
-        height = window_height_of(self.page) or layout.WINDOW_HEIGHT
-        img.width = int(height * SKIN_CANVAS_RATIO)
-        img.height = int(height)
-
     def _on_window_resize(self, _e=None) -> None:
-        """窗口尺寸变化：重校分栏钳制，并刷新气泡宽度上限/让位边距。"""
+        """窗口尺寸变化：重校分栏钳制，并刷新气泡宽度上限/让位边距。
+
+        壁纸已内嵌中栏（Stack 布局自适应），无需手动重算——拖手柄/resize
+        都由 Flet 布局天然跟随（2026-09-06 壁纸重构，docs/25）。
+        """
         if self.page is None:
             return
         width = self._window_width()
         if width <= 0:
             return
-        self._apply_bg_size()  # P4：壁纸等高左锚随之重算
         # 顺序敏感：先落新左，再以**新左**为基准钳右（否则窄窗口下两侧
         # 可能同时保持旧值、聊天区被压死）。
         self._left_width = clamp_left_width(self._left_width, self._right_width, width)
@@ -432,15 +432,35 @@ class AssistantApp:
         self.tts_banner = TTSStatusBanner()
         self.memory_panel = MemoryPanel(persona, memory=self._memory, on_extract=self._extract_callback)
 
-        self.middle = ft.Column(
-            [self.date_nav, self.tts_banner, self.chat_area, self.input_bar],
-            expand=True,
-            spacing=0,
-        )
+        # （self.middle 在下方壁纸配色段构建：中栏 = 壁纸层 + 内容列）
 
         # 可调分栏：应用持久化宽度（面板默认值仅兜底）
         self.persona_status.width = self._left_width
         self.memory_panel.width = self._right_width
+
+        # ---- 壁纸与配色（2026-09-06 用户方案重构，docs/25）----
+        # 壁纸只「住」在聊天框（中栏）里：COVER 按中栏实际尺寸裁切填充——
+        # 「每张壁纸吃尺寸不同」无需逐张适配，拖手柄/窗口变化由布局天然跟随；
+        # 左右两侧与头部透出全局 dominant 纯色（壁纸主色调相近），整体不违和。
+        dominant = (
+            self._skin_ctx.skin.dominant_color if self._skin_ctx else None
+        ) or c.BG
+        bg_path = self._skin_ctx.background_path if self._skin_ctx else None
+        scrim_opacity = self._skin_ctx.scrim_opacity if self._skin_ctx else 0.8
+
+        content_col = ft.Column(
+            [self.date_nav, self.tts_banner, self.chat_area, self.input_bar],
+            expand=True,
+            spacing=0,
+        )
+        wallpaper_layers = self._build_middle_background(
+            bg_path,
+            dominant,
+            scrim_opacity,
+            edge_colors=(self._skin_ctx.skin.edge_colors if self._skin_ctx else None),
+        )
+        self.middle = ft.Stack([*wallpaper_layers, content_col], expand=True)
+
         body = ft.Row(
             [
                 self.persona_status,
@@ -459,43 +479,15 @@ class AssistantApp:
             ctrl.opacity = 0
             ctrl.animate_opacity = ft.Animation(anim.NORMAL, anim.EASE_OUT)
 
-        # 皮肤壁纸（与头像同源）：全屏铺底 + 浅色遮罩保证前景可读 + 舰桥光晕。
-        # 皮肤资源缺失时退化为纯色背景（c.BG），行为与皮肤系统上线前一致。
-        # 背景三层（用户方案 2026-08-17）：壁纸右缘主色铺底 → 壁纸（烘焙为
-        # 2560x1600 左置画布，右缘即延伸色，接缝无缝）→ 浅色遮罩保可读。
-        # 中央光晕（舰桥基调）已删：壁纸背景下是一个突兀的大圆形。
-        bg_layers: list[ft.Control] = []
-        dominant = (
-            self._skin_ctx.skin.dominant_color if self._skin_ctx else None
-        ) or c.BG
-        bg_layers.append(ft.Container(bgcolor=dominant, expand=True))
-        bg_path = self._skin_ctx.background_path if self._skin_ctx else None
-        if bg_path and os.path.isfile(str(bg_path)):
-            # P4（docs/20_UI_ADAPTATION_ISSUES.md）：原先 ft.Image(fit=COVER) 的裁切
-            # 锚点是**居中**（0.86.5 的 Image 无 alignment），窗口比画布更高瘦时左右
-            # 被等量裁掉——左置壁纸本体被吃，右侧裁掉的却本来就是延伸色。
-            # 改为「等高 + 左锚」：给 Image 显式尺寸（高=窗口高，宽=画布比例×高），
-            # 再用容器 ALIGN_CENTER_LEFT 定位。溢出窗口右缘的部分本就是延伸色，
-            # 被窗口自然截断，无需 clip；窗口比画布更宽时右侧由底层 dominant 色板
-            # 无缝补齐。左缘自此永不动，也不需要重烘画布或升级 flet。
-            self._bg_image = ft.Image(src=str(bg_path), fit=ft.BoxFit.COVER)
-            self._apply_bg_size()
-            bg_layers.append(
-                ft.Container(
-                    content=self._bg_image,
-                    alignment=ALIGN_CENTER_LEFT,
-                    expand=True,
-                )
-            )
-            bg_layers.append(
-                ft.Container(
-                    bgcolor=c.BG,
-                    opacity=self._skin_ctx.scrim_opacity if self._skin_ctx else 0.8,
-                    expand=True,
-                )
-            )
-        bg = ft.Stack(bg_layers, expand=True)
-        root = ft.Stack([bg, ft.Column([self.header, body], expand=True)], expand=True)
+        # 全局底色：壁纸主色调相近的纯色。左右栏与头部透出它——即用户要的
+        # 「两侧纯色」；壁纸只在中栏，不再全窗铺底（中央光晕/全屏 COVER 均废弃）。
+        root = ft.Stack(
+            [
+                ft.Container(bgcolor=dominant, expand=True),
+                ft.Column([self.header, body], expand=True),
+            ],
+            expand=True,
+        )
 
         self.page.add(root)
         # 首帧就把聊天区宽度同步给气泡（P1/P7）
@@ -551,7 +543,8 @@ class AssistantApp:
         def _run() -> int:
             try:
                 return len(agent.extract_now() or [])
-            except Exception:  # noqa: BLE001 - 抽取失败只降级，绝不崩 UI
+            except Exception as e:  # noqa: BLE001 - 抽取失败只降级，绝不崩 UI
+                logger.warning("后台记忆整理失败（面板按失败态显示）：%s", e)
                 return -1
 
         return _run
@@ -624,11 +617,73 @@ class AssistantApp:
         width = window_width_of(self.page) if self.page is not None else 0
         return width if width > 0 else layout.WINDOW_WIDTH
 
+    @staticmethod
+    def _build_middle_background(
+        bg_path: "os.PathLike | str | None",
+        dominant: str,
+        scrim_opacity: float,
+        edge_colors: "Optional[dict]" = None,
+    ) -> "list[ft.Control]":
+        """聊天框（中栏）的壁纸背景**定位层列表**（直接铺进中栏 Stack）。v3。
+
+        用户反馈（docs/26）：v2 的 COVER 裁切让壁纸"被压缩+一圈黑边"，且
+        不居中；两侧灰色与亮色壁纸反差突兀。v3 按用户口径重做：
+        - **壁纸居中**：CONTAIN 完整显示、不裁不压、在中栏正中。
+        - **周围逐边延伸**：周围填充用壁纸自身四边环均值色做垂直渐变
+          （顶边色 → 环均值 → 底边色，edge_colors 由 tools/sample_skin_dominant
+          采样写入 skin.json）——"以壁纸周围那一圈颜色为基准慢慢延伸开"，
+          接缝处颜色同源、整体平和，无突兀深色边。
+        - 可读性遮罩同色系（dominant），沿用皮肤 scrim_opacity。
+        - 四向定位（left/top/right/bottom=0）：嵌套 Stack 的 expand 语义不可靠
+          （probe v11 实证），定位子项是已验证可行的机制。
+        - bg_path 无效时返回 []：中栏退化为纯 dominant（与无壁纸皮肤一致）。
+        """
+        if not bg_path or not os.path.isfile(str(bg_path)):
+            return []
+
+        ec = edge_colors or {}
+        top_c = ec.get("top") or dominant
+        bottom_c = ec.get("bottom") or dominant
+        align = ft.alignment.Alignment  # flet 0.86 无预设，Alignment(x, y) 构造
+        return [
+            # 周围填充：壁纸边色垂直渐变（顶边色→环均值→底边色），逐边延续
+            ft.Container(
+                gradient=ft.LinearGradient(
+                    begin=align(0, -1),
+                    end=align(0, 1),
+                    colors=[top_c, dominant, bottom_c],
+                ),
+                left=0,
+                top=0,
+                right=0,
+                bottom=0,
+            ),
+            # 壁纸：CONTAIN 居中完整显示（不裁切、不压缩）
+            ft.Container(
+                content=ft.Image(src=str(bg_path), fit=ft.BoxFit.CONTAIN),
+                left=0,
+                top=0,
+                right=0,
+                bottom=0,
+            ),
+            # 可读性遮罩：同色系，保证气泡文字对比度
+            ft.Container(
+                bgcolor=dominant,
+                opacity=scrim_opacity,
+                left=0,
+                top=0,
+                right=0,
+                bottom=0,
+            ),
+        ]
+
     def _sync_chat_width(self) -> None:
         """把「聊天区可用宽度」同步给各组件（P1/P3/P7 的唯一宽度基准）。
 
         - chat_area 收**文本宽度**（气泡上限/边距的基准，已扣 ListView padding）
         - date_nav 收**栏宽**（决定是否切紧凑形态）
+        - 壁纸焦点锚定随之重算（2026-09-06「跟随聊天框」：拖手柄/窗口 resize/
+          换肤重建三个时机都经过这里）
         """
         if self.chat_area is None:
             return
@@ -688,9 +743,10 @@ class AssistantApp:
         except Exception:  # noqa: BLE001 - 保存失败不影响当前会话
             logger.exception("保存皮肤选择失败（已忽略）")
             return
-        busy = self.input_bar is not None and getattr(self.input_bar, "_is_loading", False)
-        if busy:
-            logger.info("皮肤已保存，回复完成后重启生效：UI_SKIN=%s", skin_id)
+        # 单一 busy 真源（不再跨对象探测 input_bar._is_loading 私有属性）。
+        # 生成中只保存不重建：流式 worker 持有旧控件引用。
+        if self._generating:
+            logger.info("皮肤已保存，回复完成后再次选择即可生效：UI_SKIN=%s", skin_id)
             return
         self._apply_skin_runtime()
 
@@ -726,11 +782,17 @@ class AssistantApp:
             if self._memory is not None:
                 try:
                     agent_state = self._memory.state()
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("重建时读取 persona_state 失败（情绪联动降级）：%s", e)
                     agent_state = None
             self._skin_ctx = bootstrap_skin(self._settings, agent_state=agent_state)
             self.avatar_provider = self._skin_ctx.avatar_provider
             logger.info("运行时切换皮肤：%s", self._skin_ctx.skin.id)
+            # TOCTOU 防护：busy 检查发生在点击回调（同步），重建在本协程（异步）——
+            # 期间可能已开始生成回复；此时 page.clean() 会摘掉流式控件。
+            if self._generating:
+                logger.info("重建时发现回复生成中，本次换肤重建取消（皮肤已保存，可稍后重选）")
+                return
             page = self.page
             page.clean()
             self._setup_page(self._persona)
@@ -784,17 +846,47 @@ class AssistantApp:
                 int((time.monotonic() - self._session_start) / 60)
             )
         assert self.agent is not None and self.page is not None
+        self._generating = True  # 单一 busy 真源：导航/换肤在 _worker finally 复位前让位
         self.page.run_thread(self._worker, text)
+
+    def _drain_after_view_lost(self, gen) -> None:
+        """视图已离开时的优雅收尾：请求停止 → 排空生成器。
+
+        排空会让 reply() 走到正常收尾段（已生成部分落库 + 入短期窗口 +
+        情绪持久化），与「停止生成」按钮同一条已测试的路径——半截回复
+        绝不丢失（2026-09-06 审查 CRITICAL-2 防线 2）。期间 UI 更新全部丢弃。
+        """
+        if self.agent is not None:
+            self.agent.request_stop()
+        try:
+            for _ in gen:
+                pass  # request_stop 后至多再吐一个 delta，随即触发收尾
+        except Exception as e:  # noqa: BLE001 - 排空阶段的 LLM 故障只记日志
+            logger.warning("视图切换后收尾回复流失败（已忽略）：%s", e)
 
     def _worker(self, text: str) -> None:
         assert self.agent is not None and self.chat_area is not None
         assert self.input_bar is not None and self.header is not None and self.page is not None
         try:
-            text_control = self.chat_area.start_assistant()
+            gen = self.agent.reply(text)
+            try:
+                text_control = self.chat_area.start_assistant()
+            except Exception:
+                # 视图在首个 token 前就被换走（残余竞态/重建）：优雅收尾不出错误气泡
+                logger.info("回复开始前聊天视图已被切换：停止生成并保留已落库内容")
+                self._drain_after_view_lost(gen)
+                return
             started = False
-            for delta in self.agent.reply(text):
+            for delta in gen:
+                try:
+                    self.chat_area.append_assistant_text(text_control, delta)
+                except Exception:
+                    # 视图被换走 ≠ LLM 故障：排空生成器保住半截回复落库，
+                    # 不向（已被替换的）视图误报「通讯有些干扰」
+                    logger.info("流式输出中聊天视图被切换：停止生成并保留已落库内容")
+                    self._drain_after_view_lost(gen)
+                    return
                 started = True
-                self.chat_area.append_assistant_text(text_control, delta)
             if not started:
                 self.chat_area.remove_thinking()
                 self.chat_area.add_assistant("（用户，我一时语塞了……）")
@@ -809,6 +901,7 @@ class AssistantApp:
                 self.persona_status.set_state("calm")
             self.input_bar.set_loading(False)
             self.input_bar.focus()
+            self._generating = False
             self._refresh_day_options()  # 新消息落库后，「今天」应出现在日期下拉里
 
     def _fatal(self, msg: str) -> None:

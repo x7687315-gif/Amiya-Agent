@@ -52,8 +52,9 @@ class AudioPlayer:
         self._cache_dir = cache_dir or os.path.join(tempfile.gettempdir(), "assistant_audio")
         try:
             os.makedirs(self._cache_dir, exist_ok=True)
-        except Exception:  # noqa: BLE001 - 建目录失败不致命，play 时再报错
-            pass
+        except Exception as e:  # noqa: BLE001 - 建目录失败不致命，play 时再报错
+            # 留痕：权限/磁盘满等根因第一时间不可见，排障时无从下手
+            logger.debug("音频缓存目录创建失败（play 时会再尝试）：%s", e)
         self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self._worker_lock = threading.Lock()

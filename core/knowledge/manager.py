@@ -22,9 +22,12 @@ class KnowledgeManager:
         embedder: Embedder,
         *,
         top_k: int = 4,
+        extra_dirs: "tuple | list" = (),
+        hybrid: bool = False,
     ) -> None:
-        self.corpus = KnowledgeCorpus(directory)
-        self.retriever = KnowledgeRetriever(self.corpus, embedder, top_k=top_k)
+        self.corpus = KnowledgeCorpus(directory, extra_dirs=extra_dirs)
+        self.retriever = KnowledgeRetriever(
+            self.corpus, embedder, top_k=top_k, hybrid=hybrid)
 
     @property
     def is_empty(self) -> bool:
@@ -40,6 +43,15 @@ class KnowledgeManager:
     def render_block(self, hits: List[KnowledgeHit]) -> str:
         return self.retriever.render_block(hits)
 
+    def health_check(self) -> "Optional[str]":
+        """检索可用性自检（嵌入能前向吗）。健康返回 None。"""
+        embedder = getattr(self.retriever, "embedder", None)
+        if embedder is None:
+            return None
+        from ..memory.embedder import probe
+
+        return probe(embedder)
+
 
 def build_knowledge_manager(
     directory,
@@ -48,11 +60,14 @@ def build_knowledge_manager(
     model_name: str = DEFAULT_MODEL,
     device: str = "cpu",
     top_k: int = 4,
+    extra_dirs: "tuple | list" = (),
+    hybrid: bool = False,
 ) -> Optional[KnowledgeManager]:
     """工厂：加载失败返回 None（调用方据此让知识检索静默关闭，不致命）。"""
     try:
         embedder = get_embedder(backend, model_name=model_name, device=device)
-        return KnowledgeManager(directory, embedder, top_k=top_k)
+        return KnowledgeManager(
+            directory, embedder, top_k=top_k, extra_dirs=extra_dirs, hybrid=hybrid)
     except Exception as e:  # noqa: BLE001
         log.warning("知识库初始化失败，知识检索关闭：%s", e)
         return None

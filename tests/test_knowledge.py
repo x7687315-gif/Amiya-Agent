@@ -40,7 +40,7 @@ def _tmp_knowledge() -> Path:
     _write(
         d,
         "world.md",
-        "# 与矿石病\n## 定义\n带来法术，也带来无法根治的矿石病，感染者常被世俗排斥。\n",
+        "# 源石与矿石病\n## 定义\n源石带来法术，也带来无法根治的矿石病，感染者常被世俗排斥。\n",
     )
     return d
 
@@ -82,8 +82,8 @@ def test_retriever_ranks_relevant_chunk_first():
     assert "用户" in hits[0].text, "最相关应是关系片段"
     assert hits[0].channels.get("keyword", 0) > 0
     assert "score" not in hits[0].channels  # channels 里只有 vector/keyword
-    # 最相关片段应有实际内容
-    assert hits[0].text.strip(), "最相关片段不应为空"
+    # 源石片段不应排在最前
+    assert "源石" not in hits[0].text
 
 
 def test_retriever_empty_corpus_returns_nothing():

@@ -9,11 +9,14 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Callable, Optional
 
 import flet as ft
 
 from ui.theme import c, r
+
+logger = logging.getLogger("assistant.ui.handle")
 
 
 class SplitHandle(ft.GestureDetector):
@@ -43,19 +46,20 @@ class SplitHandle(ft.GestureDetector):
             delta = getattr(getattr(e, "local_delta", None), "x", 0) or 0
         try:
             self._on_resize(float(delta))
-        except Exception:  # noqa: BLE001 - 拖拽异常不冒泡
-            pass
+        except Exception as e:  # noqa: BLE001 - 拖拽异常不冒泡
+            logger.debug("栏宽增量回调失败（已忽略）：%s", e)
 
     def _handle_done(self, _e: ft.ControlEvent) -> None:
         if self._on_done is not None:
             try:
                 self._on_done()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001 - 不冒泡，但必须留痕：
+                # on_done 通常是持久化——静默失败 = 用户以为栏宽已保存
+                logger.warning("栏宽持久化回调失败：%s", e)
 
     def _hover(self, e: ft.ControlEvent) -> None:
         self._bar.bgcolor = c.PRIMARY_LIGHT if getattr(e, "data", "") == "true" else None
         try:
             self._bar.update()
-        except Exception:  # noqa: BLE001 - 未挂载时忽略
-            pass
+        except Exception as e:  # noqa: BLE001 - 未挂载时忽略
+            logger.debug("手柄悬停更新失败（未挂载）：%s", e)

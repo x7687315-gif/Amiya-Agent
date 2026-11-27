@@ -11,6 +11,7 @@ TTSResult(success=False, ...)。语音失败绝不让调用方（Agent）崩溃�
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Dict, Optional
@@ -21,6 +22,7 @@ import requests
 import yaml
 
 from .audio_utils import (
+    MIN_WAV_HEADER_BYTES,
     chunk_text,
     clean_invisible,
     concat_chunks_wav,
@@ -30,6 +32,8 @@ from .audio_utils import (
 )
 from .models import AudioData, TTSResult, TTSErrorType
 
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_PROFILES_DIR = Path(__file__).resolve().parent / "voice_profiles"
 
@@ -54,8 +58,9 @@ class TTSService:
             try:
                 with open(yaml_path, "r", encoding="utf-8") as f:
                     cfg = yaml.safe_load(f) or {}
-            except Exception:
-                # 单个 profile 损坏不应拖累整个服务
+            except Exception as e:  # noqa: BLE001 - 单个 profile 损坏不应拖累整个服务
+                # 但必须留痕：否则某个语音会从 list_voices() 里无声消失，无从排查
+                log.warning("语音 profile 加载失败（已跳过）：%s：%s", yaml_path, e)
                 continue
             name = cfg.get("name") or yaml_path.stem
             cfg["_file"] = str(yaml_path)  # 内部用：解析相对路径的锚点
@@ -160,7 +165,11 @@ class TTSService:
             if not res.success:
                 return TTSResult.fail(f"长文本分段合成失败: {res.error}", TTSErrorType.UNKNOWN)
             # 兜底：上游 chunk_text 已过滤纯标点/空块；若仍出现不可合成块，跳过不报错中断整段
-            if not res.audio or not res.audio.data or len(res.audio.data) < 44:
+            if (
+                not res.audio
+                or not res.audio.data
+                or len(res.audio.data) < MIN_WAV_HEADER_BYTES
+            ):
                 continue
             try:
                 if params0 is None:
@@ -196,7 +205,12 @@ class TTSService:
         last_err = "TTS 返回空响应"
         for attempt in range(1, max_retry + 1):
             try:
-                resp = requests.post(url, json=payload, timeout=timeout)
+                with requests.post(url, json=payload, timeout=timeout) as resp:
+                    if resp.status_code != 200:
+                        return TTSResult.fail(
+                            f"TTS 返回 HTTP {resp.status_code}", TTSErrorType.HTTP_ERROR
+                        )
+                    data = resp.content
             except requests.exceptions.ConnectionError:
                 return TTSResult.fail("TTS 服务不可用（连接被拒绝）", TTSErrorType.CONNECTION)
             except requests.exceptions.Timeout:
@@ -204,10 +218,6 @@ class TTSService:
             except requests.exceptions.RequestException as exc:
                 return TTSResult.fail(f"TTS 请求异常: {exc}", TTSErrorType.UNKNOWN)
 
-            if resp.status_code != 200:
-                return TTSResult.fail(f"TTS 返回 HTTP {resp.status_code}", TTSErrorType.HTTP_ERROR)
-
-            data = resp.content
             if data:
                 if media_type == "wav" and not is_valid_wav(data):
                     return TTSResult.fail("TTS 返回内容不是合法 WAV", TTSErrorType.INVALID_AUDIO)
@@ -215,8 +225,9 @@ class TTSService:
                 if media_type == "wav":
                     try:
                         sample_rate = wav_params_and_pcm(data)[0].framerate
-                    except Exception:
-                        sample_rate = None
+                    except Exception as e:  # noqa: BLE001 - 参数解析失败不致命
+                        # 留痕：播放器拿不到采样率时只能按默认处理，排障需要源头
+                        log.warning("WAV 采样率解析失败（sample_rate=None）：%s", e)
                 audio = AudioData(data=data, format=media_type, sample_rate=sample_rate, text=text)
                 return TTSResult.ok(audio)
             # 空响应：瞬态，重试
@@ -242,7 +253,7 @@ class TTSService:
         port = int(api.get("port", 9880))
         url = f"http://{host}:{port}/"
         try:
-            requests.get(url, timeout=2)
-            return True
+            with requests.get(url, timeout=2) as _resp:
+                return True
         except requests.exceptions.RequestException:
             return False

@@ -80,3 +80,28 @@ def test_weight_renormalization_when_vector_missing():
     hits = m.retrieve("用户 大学 考试", top_k=3)
     assert isinstance(hits, list)  # 不崩，返回列表
     store.close()
+
+
+# ---------------------------------------------------------------- 相关性闸门（2026-11-27）
+
+def test_unrelated_query_returns_nothing(mgr):
+    """无关提问不得靠 recency/importance 的底分凑满 top_k（实测曾返回 5 条无关记忆）。"""
+    hits = mgr.retrieve("明天湛江天气怎么样", top_k=5)
+    assert hits == []
+
+
+def test_gate_can_be_disabled_to_restore_old_behavior():
+    """min_vector=0/min_keyword=0 时退回旧行为（先验通道也能让记忆入选）。"""
+    from core.memory.retrieval import MemoryRetriever
+
+    store = SQLiteMemoryStore(":memory:")
+    emb = HashingEmbedder(dim=256)
+    store.upsert_memory("fact", "用户对猫毛过敏", confidence=5, importance=8)
+    openr = MemoryRetriever(store, emb, min_vector=0.0, min_keyword=0.0)
+    assert openr.retrieve("明天湛江天气怎么样", top_k=5, min_score=0.0)
+    store.close()
+
+
+def test_gate_keeps_relevant_hits(mgr):
+    hits = mgr.retrieve("用户 考试", top_k=3)
+    assert hits and any("考试" in h.content for h in hits)

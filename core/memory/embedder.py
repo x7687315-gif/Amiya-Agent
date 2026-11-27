@@ -19,6 +19,7 @@ import logging
 import math
 import os
 import re
+import threading
 from array import array
 from pathlib import Path
 from typing import List, Optional, Protocol, Sequence, runtime_checkable
@@ -161,6 +162,10 @@ class LocalEmbedder:
         self._query_instruction = query_instruction
         self._model = None
         self._dim: Optional[int] = None
+        # 懒加载锁：encode() 可能同时来自 UI 线程（检索）与 worker 线程
+        #（remember/confirm），无锁并发会双双通过 None 检查、重复加载
+        # 约 130MB 模型并互相覆盖（2026-09-06 审查修复）
+        self._model_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -175,6 +180,13 @@ class LocalEmbedder:
     def _ensure_model(self):
         if self._model is not None:
             return self._model
+        with self._model_lock:
+            if self._model is not None:
+                # 双重检查：等锁期间其他线程已完成加载，直接复用
+                return self._model
+            return self._load_model()
+
+    def _load_model(self):
 
         # 离线优先（2026-08-17 启动卡死修复）：模型已在本地缓存时，跳过
         # huggingface.co 的更新探测。网络不可达环境下每次 HEAD 超时（约 21s）
@@ -232,6 +244,28 @@ class LocalEmbedder:
 def local_backend_available() -> bool:
     """只检查包是否可导入，不触发模型加载（那会下载上百 MB 权重）。"""
     return importlib.util.find_spec("sentence_transformers") is not None
+
+
+def probe(embedder: "Embedder", *, text: str = "检索自检") -> "Optional[str]":
+    """探针：真正跑一次 encode，返回错误描述；健康返回 None。
+
+    为什么需要它（2026-11-27 事故）：`sentence-transformers` 因依赖版本不兼容
+    无法导入，`_embed_all()` 捕获异常后返回空列表——知识检索**恒为空**，
+    记忆向量通道同样降级，界面上只是"没有参考"，没有任何报错。
+    只做"包能否导入"的探测不够（`local_backend_available()` 就属于这种），
+    必须真正前向一次才能发现运行时错误（模型加载、DLL、hub 版本）。
+    """
+    try:
+        vec = embedder.encode([text])
+    except Exception as e:  # noqa: BLE001 - 任何异常都要变成可读提示
+        return f"{type(e).__name__}: {e}"[:200]
+    try:
+        first = vec[0] if vec else None
+    except Exception:  # noqa: BLE001
+        return "嵌入返回结构异常"
+    if not first:
+        return "嵌入返回空向量"
+    return None
 
 
 def get_embedder(

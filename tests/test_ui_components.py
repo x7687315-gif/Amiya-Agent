@@ -187,6 +187,10 @@ def test_chat_area_add_and_scroll_pause(persona):
     ca._on_scroll(type("E", (), {"pixels": 0, "max_scroll_extent": 800})())
     assert ca._auto_scroll is False and ca._scroll_btn.visible is True
 
-    # 点击按钮回底 -> 恢复自动回底 + 隐藏按钮
+    # 点击按钮回底 -> 隐藏按钮（无 page 时 run_task 跳过，仅验证状态）
     ca._scroll_to_bottom(None)
+    assert ca._scroll_btn.visible is False
+
+    # 模拟落底 -> 恢复自动回底（后续流式增量继续跟随）
+    ca._on_scroll(type("E", (), {"pixels": 800, "max_scroll_extent": 800})())
     assert ca._auto_scroll is True and ca._scroll_btn.visible is False

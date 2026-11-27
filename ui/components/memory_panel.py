@@ -13,11 +13,14 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import flet as ft
 
 from ui.theme import c, t, sp, r, layout
+
+logger = logging.getLogger("assistant.ui.memory")
 
 # 记忆类型 → 展示标签
 TYPE_LABEL: Dict[str, str] = {
@@ -392,7 +395,7 @@ class MemoryPanel(ft.Container):
         try:
             self.memory.confirm_candidate(cand_id)
         except Exception as e:  # noqa: BLE001
-            print(f"[memory-panel] 确认候选失败: {e}")
+            logger.warning("确认候选失败: %s", e)
         self.refresh()
 
     def _reject(self, cand_id: int) -> None:
@@ -401,7 +404,7 @@ class MemoryPanel(ft.Container):
         try:
             self.memory.reject_candidate(cand_id)
         except Exception as e:  # noqa: BLE001
-            print(f"[memory-panel] 否决候选失败: {e}")
+            logger.warning("否决候选失败: %s", e)
         self.refresh()
 
     def _open_modify_candidate(self, cand: Dict[str, object]) -> None:
@@ -462,7 +465,7 @@ class MemoryPanel(ft.Container):
         try:
             self.memory.forget_id(mem_id)
         except Exception as e:  # noqa: BLE001
-            print(f"[memory-panel] 遗忘失败: {e}")
+            logger.warning("遗忘失败: %s", e)
         self.refresh()
 
     def _open_modify_memory(self, mem: Dict[str, object]) -> None:
@@ -597,7 +600,7 @@ class MemoryPanel(ft.Container):
             try:
                 self.memory.remember(str(type_dd.value or "fact"), text, importance=5, confidence=4)
             except Exception as e:  # noqa: BLE001
-                print(f"[memory-panel] 新增记忆失败: {e}")
+                logger.warning("新增记忆失败: %s", e)
             dialog.open = False
             self.page.update()
             self.refresh()

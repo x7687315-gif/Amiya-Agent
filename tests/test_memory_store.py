@@ -287,5 +287,61 @@ def test_migration_v1_db_upgrades_to_v2(tmp_path):
         s.close()
 
 
+# ----- LIKE 通配符转义 + 缺失种子行防护（2026-09-06 审查修复） -----
+
+
+def test_delete_by_keyword_escapes_like_wildcards():
+    """关键词按**字面**匹配：内容里真实的 % / _ 才算命中。
+
+    旧实现（未转义）把 % / _ 当通配符：forget("%") 会清空**全部**记忆、
+    forget("a_b") 会误伤所有 "aXb" 形态的内容。转义后通配符退化为字面字符。"""
+    s = _store()
+    try:
+        s.upsert_memory("fact", "喜欢猫", confidence=4, importance=5)
+        s.upsert_memory("event", "去了海边", confidence=4, importance=5)
+        s.upsert_memory("fact", "折扣是 50%off", confidence=3, importance=4)
+        s.upsert_memory("fact", "文件名是 a_b.txt", confidence=3, importance=4)
+
+        # 纯通配符关键词：按字面只应命中内容里真含 % 的那一条（旧实现删光 4 条）
+        deleted = s.delete_by_keyword("%")
+        assert deleted == 1
+        remaining = {m["content"] for m in s.memories()}
+        assert remaining == {"喜欢猫", "去了海边", "文件名是 a_b.txt"}
+
+        # 下划线关键词：按字面命中 a_b.txt，不误伤其他行
+        deleted = s.delete_by_keyword("a_b")
+        assert deleted == 1
+        remaining = {m["content"] for m in s.memories()}
+        assert remaining == {"喜欢猫", "去了海边"}
+    finally:
+        s.close()
+
+
+def test_purge_candidates_by_keyword_escapes_like_wildcards():
+    s = _store()
+    try:
+        s.add_candidate("fact", "候选A")
+        s.add_candidate("fact", "候选B")
+        assert s.purge_candidates_by_keyword("%") == 0  # 通配符不匹配任何行
+        assert s.purge_candidates_by_keyword("候选A") == 1  # 字面匹配仍有效
+    finally:
+        s.close()
+
+
+def test_load_state_returns_defaults_when_seed_row_missing():
+    """persona_state 种子行被破坏（库损坏）时返回默认值，
+    而不是在 reply() 链路里裸抛 TypeError。"""
+    s = _store()
+    try:
+        s._conn.execute("DELETE FROM persona_state")
+        s._conn.commit()
+        state = s.load_state()
+        assert state["trust"] == 70
+        assert state["emotion"] == "calm"
+        assert state["companionship_seconds"] == 0
+    finally:
+        s.close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-q"])

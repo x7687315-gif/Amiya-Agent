@@ -35,15 +35,28 @@ class RelationshipManager:
     def companionship_seconds(self) -> int:
         return int(self._state().get("companionship_seconds", 0))
 
+    @staticmethod
+    def _threshold_of(spec: Dict[str, Any]) -> int:
+        """安全读取阶段阈值：YAML 误写非数字（如 ``threshold: 高``）按 0 处理。
+
+        relationship_block() 在 reply() 主链路上且（与检索/知识块不同）没有
+        try 降级保护——这里解析失败绝不能抛 ValueError 打断整轮回复
+        （2026-09-06 审查修复）。
+        """
+        try:
+            return int(spec.get("threshold", 0))
+        except (TypeError, ValueError):
+            return 0
+
     @property
     def stage(self) -> str:
         """根据当前 trust 选出命中的最高阶段（stages 按阈值升序判定）。"""
         trust = self.trust
         chosen = self._default_stage
         for name, spec in sorted(
-            self._stages.items(), key=lambda kv: int(kv[1].get("threshold", 0))
+            self._stages.items(), key=lambda kv: self._threshold_of(kv[1])
         ):
-            if trust >= int(spec.get("threshold", 0)):
+            if trust >= self._threshold_of(spec):
                 chosen = name
         return chosen
 
